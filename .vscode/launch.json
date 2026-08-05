@@ -1,0 +1,45 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "FastAPI: Uvicorn",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": [
+        "main:app",
+        "--host",
+        "127.0.0.1",
+        "--port",
+        "8000"
+      ],
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "subProcess": true
+    },
+    {
+      "name": "Browser: Dashboard",
+      "type": "chrome",
+      "request": "launch",
+      "url": "http://127.0.0.1:8000/dashboard",
+      "webRoot": "${workspaceFolder}",
+      "preLaunchTask": "Wait for FastAPI",
+      "sourceMaps": true,
+      "skipFiles": [
+        "<node_internals>/**"
+      ]
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Full Stack: FastAPI + Chrome",
+      "configurations": [
+        "FastAPI: Uvicorn",
+        "Browser: Dashboard"
+      ],
+      "stopAll": true
+    }
+  ]
+}
