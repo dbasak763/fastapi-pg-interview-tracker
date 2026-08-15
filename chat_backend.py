@@ -93,7 +93,7 @@ def select_request_tools(
     message: str,
     focus_topic: Optional[str],
 ) -> List[dict]:
-    """Narrow focused questions to the exact-topic progression operation."""
+    """Narrow selected-topic questions to the topic progression operation."""
 
     if not focus_topic:
         return tools
@@ -295,11 +295,12 @@ def run_provider_tool_chat(
         "come from allowlisted Swagger GET operations. "
         "Routing rules: use topic_summaries for weakest, strongest, average, "
         "or any cross-topic comparison; use topic_score_progression for the "
-        "dates, scores, companies, history, improvement, or best company for "
-        "one exact focus topic; use list_attempts for filtered attempts; use "
+        "dates, scores, companies, focus areas, history, improvement, or best "
+        "company for one exact selected topic category; use list_attempts for "
+        "filtered attempts; use "
         "get_attempt for one attempt ID; use "
         "score_history or score_timeline for overall score history; use "
-        "challenge_topics only to list topic names and counts. Current selected "
+        "dashboard_topics only to list topic names and counts. Current selected "
         f"topic: {selected_topic}. When the user says 'this topic', pass that "
         "exact selected topic name, never the literal words 'this topic'. Also "
         "use the exact selected topic for an obvious misspelling of its name. "

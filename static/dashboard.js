@@ -17,6 +17,7 @@ const refreshTopicsButton = document.querySelector("#refresh-topics");
 const chartContainer = document.querySelector(".chart-container");
 const chartMessage = document.querySelector("#chart-message");
 const chartSummary = document.querySelector("#chart-summary");
+const chartTitle = document.querySelector("#chart-title");
 const latestScore = document.querySelector("#latest-score");
 const attemptRows = document.querySelector("#attempt-rows");
 const chatPanel = document.querySelector("#chat-panel");
@@ -170,11 +171,12 @@ async function loadScores(topic) {
   // NORMAL DASHBOARD DATA PATH:
   // selected topic -> FastAPI progression endpoint -> PostgreSQL -> chart/table.
   showMessage("Loading scores…");
+  chartTitle.textContent = `${topic} score history`;
   attemptRows.replaceChildren();
 
   try {
     const response = await fetch(
-      `/api/dashboard/topic-score-progression?focusTopic=${encodeURIComponent(topic)}`,
+      `/api/dashboard/topic-score-progression?topic=${encodeURIComponent(topic)}`,
     );
     if (!response.ok) {
       throw new Error("Could not load scores.");
@@ -217,7 +219,7 @@ async function refreshTopics() {
   refreshTopicsButton.disabled = true;
 
   try {
-    const response = await fetch("/api/dashboard/challenge-topics");
+    const response = await fetch("/api/dashboard/topics");
     if (!response.ok) {
       throw new Error("Could not load topics.");
     }
@@ -242,11 +244,11 @@ async function refreshTopics() {
       return;
     }
 
-    topics.forEach(({ focusTopic }) => {
-      topicSelect.append(new Option(focusTopic, focusTopic));
+    topics.forEach(({ topic }) => {
+      topicSelect.append(new Option(topic, topic));
     });
 
-    if (topics.some(({ focusTopic }) => focusTopic === selectedTopic)) {
+    if (topics.some(({ topic }) => topic === selectedTopic)) {
       topicSelect.value = selectedTopic;
     }
 
@@ -574,7 +576,7 @@ async function sendChatMessage() {
       body: JSON.stringify({
         message: messageText,
         // This lets phrases such as "this topic" resolve to the current select.
-        focusTopic: topicSelect.value || null,
+        topic: topicSelect.value || null,
         history: priorHistory,
       }),
     });

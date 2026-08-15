@@ -28,7 +28,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-from sqlalchemy import func, text
+from sqlalchemy import text
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
@@ -42,6 +42,7 @@ from chat_backend import (
 )
 from llm_config import LLMSettings
 from llm_router import route_llm_request
+from topic_taxonomy import canonical_topic
 
 logger = logging.getLogger(__name__)
 
@@ -199,17 +200,18 @@ class AttemptResponse(AttemptBase):
     created_at: datetime
 
 
-class ChallengeTopicSummary(BaseModel):
+class DashboardTopicSummary(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-    focus_topic: str
+    topic: str
     attempt_count: int
+    focus_topic_count: int
 
 
 class TopicPerformanceSummary(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-    focus_topic: str
+    topic: str
     attempt_count: int
     average_score: float
     lowest_score: float
@@ -248,7 +250,8 @@ class TopicScorePoint(BaseModel):
 class TopicScoreProgressionResponse(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
-    focus_topic: str
+    topic: str
+    focus_topics: List[str]
     points: List[TopicScorePoint]
 
 
@@ -261,6 +264,8 @@ class ChatRequest(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
     message: str = Field(min_length=1, max_length=1000)
+    topic: Optional[str] = Field(default=None, max_length=250)
+    # Kept for older dashboard clients; new clients send the broader topic.
     focus_topic: Optional[str] = Field(default=None, max_length=250)
     history: List[ChatHistoryMessage] = Field(default_factory=list, max_length=12)
 
@@ -297,7 +302,7 @@ class ChatQueryScope:
     """Server-resolved scope shared by retrieval, charts, and fallback answers."""
 
     current_date: date
-    focus_topic: Optional[str]
+    topic: Optional[str]
     start_date: Optional[date] = None
     end_date: Optional[date] = None
 
@@ -364,7 +369,7 @@ class TopicProgressionToolArguments(BaseModel):
         extra="forbid",
     )
 
-    focus_topic: str = Field(min_length=1, max_length=250)
+    topic: str = Field(min_length=1, max_length=250)
 
 
 @app.get("/")
@@ -571,33 +576,35 @@ def score_timeline(db: Session = Depends(get_db)):
 
 
 @app.get(
-    "/api/dashboard/challenge-topics",
-    response_model=List[ChallengeTopicSummary],
+    "/api/dashboard/topics",
+    response_model=List[DashboardTopicSummary],
     response_model_by_alias=True,
-    operation_id="challenge_topics",
+    operation_id="dashboard_topics",
 )
-def challenge_topics(db: Session = Depends(get_db)):
-    """List every scored focus topic and its completed attempt count."""
-    rows = (
-        db.query(
-            InterviewAttempt.focus_topic,
-            func.count(InterviewAttempt.id).label("attempt_count"),
-        )
+def dashboard_topics(db: Session = Depends(get_db)):
+    """List canonical dashboard topics and their completed attempt counts."""
+    attempts = (
+        db.query(InterviewAttempt)
         .filter(
             InterviewAttempt.status == "complete",
             InterviewAttempt.score.is_not(None),
-            InterviewAttempt.focus_topic.is_not(None),
         )
-        .group_by(InterviewAttempt.focus_topic)
-        .order_by(InterviewAttempt.focus_topic.asc())
         .all()
     )
+    grouped = {}
+    for attempt in attempts:
+        topic = canonical_topic(attempt.topic, attempt.focus_topic)
+        bucket = grouped.setdefault(topic, {"attempts": 0, "focus_topics": set()})
+        bucket["attempts"] += 1
+        if attempt.focus_topic:
+            bucket["focus_topics"].add(attempt.focus_topic)
     return [
-        ChallengeTopicSummary(
-            focus_topic=row.focus_topic,
-            attempt_count=row.attempt_count,
+        DashboardTopicSummary(
+            topic=topic,
+            attempt_count=values["attempts"],
+            focus_topic_count=len(values["focus_topics"]),
         )
-        for row in rows
+        for topic, values in sorted(grouped.items())
     ]
 
 
@@ -608,16 +615,14 @@ def challenge_topics(db: Session = Depends(get_db)):
     operation_id="topic_summaries",
 )
 def topic_summaries(db: Session = Depends(get_db)):
-    """Compare all focus topics by count, average, range, latest score, and change."""
+    """Compare canonical topics by count, average, range, latest score, and change."""
     attempts = (
         db.query(InterviewAttempt)
         .filter(
             InterviewAttempt.status == "complete",
             InterviewAttempt.score.is_not(None),
-            InterviewAttempt.focus_topic.is_not(None),
         )
         .order_by(
-            InterviewAttempt.focus_topic.asc(),
             InterviewAttempt.attempted_date.asc(),
             InterviewAttempt.started_at.asc(),
             InterviewAttempt.id.asc(),
@@ -626,11 +631,12 @@ def topic_summaries(db: Session = Depends(get_db)):
     )
     grouped = {}
     for attempt in attempts:
-        grouped.setdefault(attempt.focus_topic, []).append(float(attempt.score))
+        topic = canonical_topic(attempt.topic, attempt.focus_topic)
+        grouped.setdefault(topic, []).append(float(attempt.score))
 
     summaries = [
         TopicPerformanceSummary(
-            focus_topic=focus_topic,
+            topic=topic,
             attempt_count=len(scores),
             average_score=sum(scores) / len(scores),
             lowest_score=min(scores),
@@ -639,7 +645,7 @@ def topic_summaries(db: Session = Depends(get_db)):
             latest_score=scores[-1],
             score_change=scores[-1] - scores[0],
         )
-        for focus_topic, scores in grouped.items()
+        for topic, scores in grouped.items()
     ]
     return sorted(summaries, key=lambda item: item.average_score)
 
@@ -651,20 +657,18 @@ def topic_summaries(db: Session = Depends(get_db)):
     operation_id="topic_score_progression",
 )
 def topic_score_progression(
-    focus_topic: str = Query(
+    topic: str = Query(
         min_length=1,
         max_length=250,
-        alias="focusTopic",
     ),
     db: Session = Depends(get_db),
 ):
-    """Return every completed score for one exact focus topic chronologically."""
-    attempts = (
+    """Return completed scores for one canonical topic chronologically."""
+    scored_attempts = (
         db.query(InterviewAttempt)
         .filter(
             InterviewAttempt.status == "complete",
             InterviewAttempt.score.is_not(None),
-            InterviewAttempt.focus_topic == focus_topic,
         )
         .order_by(
             InterviewAttempt.attempted_date.asc(),
@@ -673,14 +677,22 @@ def topic_score_progression(
         )
         .all()
     )
+    attempts = [
+        attempt
+        for attempt in scored_attempts
+        if canonical_topic(attempt.topic, attempt.focus_topic) == topic
+    ]
     if not attempts:
         raise HTTPException(
             status_code=404,
-            detail=f"No completed scores found for topic: {focus_topic}",
+            detail=f"No completed scores found for topic: {topic}",
         )
 
     return TopicScoreProgressionResponse(
-        focus_topic=focus_topic,
+        topic=topic,
+        focus_topics=sorted(
+            {attempt.focus_topic for attempt in attempts if attempt.focus_topic}
+        ),
         points=[
             TopicScorePoint(
                 attempt_id=attempt.id,
@@ -785,13 +797,13 @@ def _execute_score_timeline(
     ]
 
 
-def _execute_challenge_topics(
+def _execute_dashboard_topics(
     arguments: EmptyToolArguments,
     db: Session,
 ) -> List[dict]:
     return [
         item.model_dump(by_alias=True, mode="json")
-        for item in challenge_topics(db)
+        for item in dashboard_topics(db)
     ]
 
 
@@ -811,7 +823,7 @@ def _execute_topic_progression(
 ) -> dict:
     try:
         return topic_score_progression(
-            focus_topic=arguments.focus_topic,
+            topic=arguments.topic,
             db=db,
         ).model_dump(by_alias=True, mode="json")
     except HTTPException as exc:
@@ -841,9 +853,9 @@ APPROVED_CHAT_OPERATIONS: Dict[str, ApprovedOperation] = {
         arguments_model=EmptyToolArguments,
         executor=_execute_score_timeline,
     ),
-    "challenge_topics": ApprovedOperation(
+    "dashboard_topics": ApprovedOperation(
         arguments_model=EmptyToolArguments,
-        executor=_execute_challenge_topics,
+        executor=_execute_dashboard_topics,
     ),
     "topic_summaries": ApprovedOperation(
         arguments_model=EmptyToolArguments,
@@ -900,6 +912,9 @@ def _resolve_chat_query_scope(
     asks_for_all_topics = bool(
         words.intersection({"all", "across", "every", "overall"})
     ) or "full context" in message
+    selected_topic = payload.topic
+    if not selected_topic and payload.focus_topic:
+        selected_topic = canonical_topic(payload.focus_topic, payload.focus_topic)
 
     start_date = None
     end_date = None
@@ -910,7 +925,7 @@ def _resolve_chat_query_scope(
 
     return ChatQueryScope(
         current_date=current_date,
-        focus_topic=None if asks_for_all_topics else payload.focus_topic,
+        topic=None if asks_for_all_topics else selected_topic,
         start_date=start_date,
         end_date=end_date,
     )
@@ -984,7 +999,7 @@ def _build_chat_visualization(
         )
     )
 
-    if compares_topics or not resolved_scope.focus_topic:
+    if compares_topics or not resolved_scope.topic:
         summaries = topic_summaries(db)
         if not summaries:
             return None
@@ -1001,7 +1016,7 @@ def _build_chat_visualization(
             y_axis_label="Average score",
             points=[
                 ChatVisualizationPoint(
-                    label=summary.focus_topic,
+                    label=summary.topic,
                     value=summary.average_score,
                     detail=(
                         f"{summary.attempt_count} "
@@ -1013,12 +1028,12 @@ def _build_chat_visualization(
         )
 
     try:
-        progression = topic_score_progression(resolved_scope.focus_topic, db)
+        progression = topic_score_progression(resolved_scope.topic, db)
     except HTTPException:
         return None
     return ChatVisualization(
         chart_type=chart_type,
-        title=f"{resolved_scope.focus_topic} score progression",
+        title=f"{resolved_scope.topic} score progression",
         x_axis_label="Date",
         y_axis_label="Score",
         points=[
@@ -1057,6 +1072,29 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         db,
         scope=scope,
     )
+    message_words = set(re.findall(r"[a-z]+", payload.message.lower()))
+    asks_for_selected_topic_latest_score = (
+        scope.topic
+        and decision.intent == "lookup"
+        and "score" in message_words
+        and bool(message_words.intersection({"latest", "current", "recent"}))
+    )
+    if asks_for_selected_topic_latest_score:
+        progression = topic_score_progression(scope.topic, db)
+        latest = progression.points[-1]
+        focus_detail = (
+            f" in {latest.focus_topic}" if latest.focus_topic else ""
+        )
+        return ChatResponse(
+            reply=(
+                f"Your latest {scope.topic} score is {latest.score:.1f}, from "
+                f"{latest.attempted_date:%B %d, %Y}{focus_detail}."
+            ),
+            provider="database",
+            route=decision.intent,
+            operations=["topic_score_progression"],
+            visualization=visualization,
+        )
     if scope.has_date_window and decision.intent == "visualization" and visualization:
         values = [point.value for point in visualization.points]
         highest = max(visualization.points, key=lambda point: point.value)
@@ -1087,8 +1125,8 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             "offset": 0,
         }
         topic_context = (
-            f"only the selected topic {scope.focus_topic!r}"
-            if scope.focus_topic
+            f"only the selected topic {scope.topic!r}"
+            if scope.topic
             else "all topics; ignore the dashboard's selected topic"
         )
         request_context = (
@@ -1103,7 +1141,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             result = run_provider_tool_chat(
                 provider=provider,
                 message=payload.message,
-                focus_topic=scope.focus_topic,
+                focus_topic=scope.topic,
                 history=[
                     {"role": item.role, "content": item.content}
                     for item in payload.history
@@ -1211,7 +1249,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             weakest = min(summaries, key=lambda item: item.average_score)
             return ChatResponse(
                 reply=(
-                    f"Your lowest-scoring topic is {weakest.focus_topic}, "
+                    f"Your lowest-scoring topic is {weakest.topic}, "
                     f"averaging {weakest.average_score:.1f} across "
                     f"{weakest.attempt_count} "
                     f"{'attempt' if weakest.attempt_count == 1 else 'attempts'}."
@@ -1227,18 +1265,19 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         InterviewAttempt.status == "complete",
         InterviewAttempt.score.is_not(None),
     )
-    if scope.focus_topic:
-        scored_query = scored_query.filter(
-            InterviewAttempt.focus_topic == scope.focus_topic,
-        )
-
     attempts = scored_query.order_by(
         InterviewAttempt.attempted_date.asc(),
         InterviewAttempt.started_at.asc(),
         InterviewAttempt.id.asc(),
     ).all()
+    if scope.topic:
+        attempts = [
+            attempt
+            for attempt in attempts
+            if canonical_topic(attempt.topic, attempt.focus_topic) == scope.topic
+        ]
 
-    topic_label = f" for {scope.focus_topic}" if scope.focus_topic else ""
+    topic_label = f" for {scope.topic}" if scope.topic else ""
     if message_words.intersection({"hello", "hi", "hey"}):
         return ChatResponse(
             reply=(
@@ -1251,18 +1290,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
     if "topic" in message and any(
         word in message for word in ("available", "list", "what", "which", "all")
     ):
-        topics = (
-            db.query(InterviewAttempt.focus_topic)
-            .filter(
-                InterviewAttempt.status == "complete",
-                InterviewAttempt.score.is_not(None),
-                InterviewAttempt.focus_topic.is_not(None),
-            )
-            .distinct()
-            .order_by(InterviewAttempt.focus_topic.asc())
-            .all()
-        )
-        names = [row.focus_topic for row in topics]
+        names = [summary.topic for summary in dashboard_topics(db)]
         return ChatResponse(
             reply=(
                 f"Your scored topics are: {', '.join(names)}."

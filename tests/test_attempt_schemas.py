@@ -30,7 +30,7 @@ class AttemptSchemaTests(unittest.TestCase):
 
         self.assertEqual(scope.start_date, date(2026, 8, 8))
         self.assertEqual(scope.end_date, date(2026, 8, 15))
-        self.assertIsNone(scope.focus_topic)
+        self.assertIsNone(scope.topic)
 
     def test_full_context_ignores_selected_topic(self):
         scope = _resolve_chat_query_scope(
@@ -45,7 +45,18 @@ class AttemptSchemaTests(unittest.TestCase):
         )
 
         self.assertEqual(scope.start_date, date(2026, 8, 8))
-        self.assertIsNone(scope.focus_topic)
+        self.assertIsNone(scope.topic)
+
+    def test_legacy_focus_topic_maps_to_broader_topic(self):
+        scope = _resolve_chat_query_scope(
+            ChatRequest(
+                message="show progress for this topic",
+                focus_topic="Deep Learning Fundamentals",
+            ),
+            today=date(2026, 8, 15),
+        )
+
+        self.assertEqual(scope.topic, "Deep Learning")
 
     @patch("main.list_attempts")
     def test_last_week_chart_uses_filtered_attempts_across_topics(self, attempts):
@@ -122,7 +133,8 @@ class AttemptSchemaTests(unittest.TestCase):
     @patch("main.topic_score_progression")
     def test_builds_bar_chart_from_validated_progression(self, progression):
         progression.return_value = TopicScoreProgressionResponse(
-            focus_topic="System Design",
+            topic="Deep Learning",
+            focus_topics=["Deep Learning Fundamentals"],
             points=[
                 TopicScorePoint(
                     attempt_id=1,
@@ -138,7 +150,7 @@ class AttemptSchemaTests(unittest.TestCase):
         visualization = _build_chat_visualization(
             ChatRequest(
                 message="Draw a bar chart",
-                focus_topic="System Design",
+                topic="Deep Learning",
             ),
             "visualization",
             db=object(),
@@ -152,7 +164,7 @@ class AttemptSchemaTests(unittest.TestCase):
     def test_builds_topic_comparison_for_plural_prompt(self, summaries):
         summaries.return_value = [
             TopicPerformanceSummary(
-                focus_topic="SQL",
+                topic="Algorithms & Data Structures",
                 attempt_count=3,
                 average_score=68,
                 lowest_score=60,
@@ -166,14 +178,17 @@ class AttemptSchemaTests(unittest.TestCase):
         visualization = _build_chat_visualization(
             ChatRequest(
                 message="Draw a bar chart comparing all topics",
-                focus_topic="System Design",
+                topic="Deep Learning",
             ),
             "visualization",
             db=object(),
         )
 
         self.assertEqual(visualization.title, "Topic average scores")
-        self.assertEqual(visualization.points[0].label, "SQL")
+        self.assertEqual(
+            visualization.points[0].label,
+            "Algorithms & Data Structures",
+        )
 
 
 if __name__ == "__main__":
