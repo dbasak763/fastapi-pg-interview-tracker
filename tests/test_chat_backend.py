@@ -1,14 +1,17 @@
 import unittest
 from unittest.mock import patch
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from chat_backend import (
     ApprovedOperation,
     ChatToolError,
     build_tools_from_openapi,
+    describe_provider_error,
     execute_approved_operation,
     run_groq_tool_chat,
+    select_request_tools,
 )
 
 
@@ -98,6 +101,70 @@ class ChatBackendTests(unittest.TestCase):
             )
 
         self.assertEqual(self.executed, [])
+
+    def test_focused_question_only_exposes_topic_progression(self):
+        tools = [
+            {"type": "function", "function": {"name": "score_timeline"}},
+            {
+                "type": "function",
+                "function": {"name": "topic_score_progression"},
+            },
+        ]
+
+        selected = select_request_tools(
+            tools,
+            message="What is my latest score?",
+            focus_topic="System Design",
+        )
+
+        self.assertEqual(
+            [tool["function"]["name"] for tool in selected],
+            ["topic_score_progression"],
+        )
+
+    def test_overall_question_keeps_cross_topic_tools(self):
+        tools = [
+            {"type": "function", "function": {"name": "score_timeline"}},
+            {
+                "type": "function",
+                "function": {"name": "topic_score_progression"},
+            },
+        ]
+
+        selected = select_request_tools(
+            tools,
+            message="Review every attempt",
+            focus_topic="System Design",
+        )
+
+        self.assertEqual(selected, tools)
+
+    def test_provider_error_description_includes_safe_groq_fields(self):
+        request = httpx.Request("POST", "https://api.example.invalid/chat")
+        response = httpx.Response(
+            413,
+            request=request,
+            json={
+                "error": {
+                    "type": "tokens",
+                    "code": "rate_limit_exceeded",
+                    "message": "Internal account details should not be logged",
+                }
+            },
+        )
+        error = httpx.HTTPStatusError(
+            "request failed",
+            request=request,
+            response=response,
+        )
+
+        description = describe_provider_error(error)
+
+        self.assertEqual(
+            description,
+            "HTTPStatusError status=413 type=tokens code=rate_limit_exceeded",
+        )
+        self.assertNotIn("account details", description)
 
     @patch("chat_backend._provider_completion")
     def test_tool_call_is_executed_then_returned_to_model(self, completion):

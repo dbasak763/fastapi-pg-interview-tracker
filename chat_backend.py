@@ -55,6 +55,63 @@ class ToolChatResult:
     operations: List[str]
 
 
+def describe_provider_error(error: Exception) -> str:
+    """Return safe HTTP diagnostics without response bodies or credentials."""
+
+    details = [type(error).__name__]
+    if not isinstance(error, httpx.HTTPStatusError):
+        return " ".join(details)
+
+    details.append(f"status={error.response.status_code}")
+    try:
+        provider_error = error.response.json().get("error", {})
+    except (ValueError, AttributeError):
+        provider_error = {}
+    if provider_error.get("type"):
+        details.append(f"type={provider_error['type']}")
+    if provider_error.get("code"):
+        details.append(f"code={provider_error['code']}")
+    return " ".join(details)
+
+
+OVERALL_SCOPE_WORDS = {
+    "all",
+    "across",
+    "compare",
+    "comparison",
+    "every",
+    "overall",
+    "strongest",
+    "weakest",
+}
+
+
+def select_request_tools(
+    tools: List[dict],
+    *,
+    message: str,
+    focus_topic: Optional[str],
+) -> List[dict]:
+    """Narrow focused questions to the exact-topic progression operation."""
+
+    if not focus_topic:
+        return tools
+    words = {
+        token.strip(".,!?;:()[]{}\"'").lower()
+        for token in message.split()
+    }
+    if words.intersection(OVERALL_SCOPE_WORDS):
+        return tools
+
+    progression_tools = [
+        tool
+        for tool in tools
+        if (tool.get("function") or {}).get("name")
+        == "topic_score_progression"
+    ]
+    return progression_tools or tools
+
+
 def build_tools_from_openapi(
     openapi_schema: dict,
     approved_operations: Dict[str, ApprovedOperation],
@@ -237,10 +294,15 @@ def run_provider_tool_chat(
         {"role": "user", "content": message},
     ]
     operations_used = []
+    request_tools = select_request_tools(
+        tools,
+        message=message,
+        focus_topic=focus_topic,
+    )
     assistant_message = _provider_completion(
         provider=provider,
         messages=messages,
-        tools=tools,
+        tools=request_tools,
     )
     tool_calls = assistant_message.get("tool_calls") or []
 
@@ -321,9 +383,11 @@ def run_provider_tool_chat(
         )
     elif request_intent == "visualization":
         answer_prompt += (
-            " For visualization requests, include a compact Markdown table of "
-            "the values to plot and clearly name the suggested chart type, x "
-            "axis, and y axis."
+            " For visualization requests, write at most two short sentences "
+            "about the most important pattern in the returned data. The "
+            "browser already renders the validated chart. Do not name axes or "
+            "chart types, and do not output a table, ASCII chart, field names, "
+            "or plotting instructions."
         )
     messages[0] = {"role": "system", "content": answer_prompt}
     final_message = _provider_completion(

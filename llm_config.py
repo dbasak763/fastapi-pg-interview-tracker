@@ -26,7 +26,6 @@ class LLMSettings:
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None):
         env = environ if environ is not None else os.environ
-        legacy_groq_model = env.get("GROQ_MODEL", "llama-3.1-8b-instant")
         return cls(
             groq_api_key=env.get("GROQ_API_KEY"),
             groq_base_url=env.get(
@@ -34,14 +33,17 @@ class LLMSettings:
                 "https://api.groq.com/openai/v1",
             ),
             groq_models={
-                "lookup": env.get("GROQ_LOOKUP_MODEL", legacy_groq_model),
+                "lookup": env.get(
+                    "GROQ_LOOKUP_MODEL",
+                    "openai/gpt-oss-20b",
+                ),
                 "analysis": env.get(
                     "GROQ_ANALYSIS_MODEL",
-                    "llama-3.3-70b-versatile",
+                    "openai/gpt-oss-120b",
                 ),
                 "visualization": env.get(
                     "GROQ_VISUALIZATION_MODEL",
-                    "openai/gpt-oss-20b",
+                    "openai/gpt-oss-120b",
                 ),
             },
             local_enabled=_enabled(env.get("LOCAL_LLM_ENABLED")),
@@ -55,11 +57,11 @@ class LLMSettings:
                 env.get("LOCAL_LLM_TIMEOUT_SECONDS", "90")
             ),
             provider_preferences={
-                "lookup": env.get("LLM_LOOKUP_PROVIDER", "groq"),
+                "lookup": env.get("LLM_LOOKUP_PROVIDER", "local"),
                 "analysis": env.get("LLM_ANALYSIS_PROVIDER", "groq"),
                 "visualization": env.get(
                     "LLM_VISUALIZATION_PROVIDER",
-                    "local",
+                    "groq",
                 ),
             },
         )

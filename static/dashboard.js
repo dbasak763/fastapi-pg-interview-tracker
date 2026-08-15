@@ -278,6 +278,30 @@ function updateChatTopicContext() {
   chatTopicContext.textContent = topicSelect.value || "All interview data";
 }
 
+async function loadChatConfig() {
+  try {
+    const response = await fetch("/api/dashboard/chat/config");
+    if (!response.ok) {
+      throw new Error("Routing configuration is unavailable.");
+    }
+    const { availableProviders, routes } = await response.json();
+    if (!availableProviders.length) {
+      chatProviderStatus.textContent = "Deterministic fallback";
+      return;
+    }
+
+    const providerLabels = availableProviders.map((provider) =>
+      provider === "groq" ? "Groq" : provider === "local" ? "Local" : provider,
+    );
+    chatProviderStatus.textContent = `Automatic · ${providerLabels.join(" + ")}`;
+    chatProviderStatus.title = Object.entries(routes)
+      .map(([intent, route]) => `${intent}: ${route.model || route.provider}`)
+      .join(" · ");
+  } catch {
+    chatProviderStatus.textContent = "Automatic routing";
+  }
+}
+
 function appendInlineFormatting(parent, text) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   parts.filter(Boolean).forEach((part) => {
@@ -360,6 +384,117 @@ function addChatMessage(text, type, extraClass) {
   chatBody.appendChild(message);
   chatBody.scrollTop = chatBody.scrollHeight;
   return message;
+}
+
+function renderChatVisualization(message, visualization) {
+  if (!window.Chart || !visualization.points.length) {
+    return;
+  }
+
+  const content = message.querySelector(".message-content");
+  const figure = document.createElement("figure");
+  figure.className = "chat-visualization";
+
+  const heading = document.createElement("figcaption");
+  const title = document.createElement("strong");
+  title.textContent = visualization.title;
+  const axes = document.createElement("span");
+  axes.textContent = `${visualization.xAxisLabel} · ${visualization.yAxisLabel}`;
+  heading.append(title, axes);
+
+  const canvasWrap = document.createElement("div");
+  canvasWrap.className = "chat-chart-canvas-wrap";
+  const isTopicComparison =
+    visualization.chartType === "bar" &&
+    visualization.xAxisLabel.toLowerCase().includes("topic");
+  if (isTopicComparison) {
+    canvasWrap.style.height = `${Math.max(300, visualization.points.length * 38)}px`;
+  }
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute(
+    "aria-label",
+    `${visualization.title}. ${visualization.points
+      .map((point) => `${point.label}: ${point.value}`)
+      .join(", ")}`,
+  );
+  canvasWrap.appendChild(canvas);
+  figure.append(heading, canvasWrap);
+  content.prepend(figure);
+
+  const isDateAxis = visualization.xAxisLabel.toLowerCase() === "date";
+  const fullLabels = visualization.points.map((point) =>
+    isDateAxis ? formatDate(point.label) : point.label,
+  );
+  const labels = fullLabels.map((label) =>
+    isTopicComparison && label.length > 42
+      ? `${label.slice(0, 39)}…`
+      : label,
+  );
+  const categoryScale = {
+    grid: { display: false },
+    ticks: {
+      autoSkip: false,
+      color: "#71807b",
+      maxRotation: 35,
+      minRotation: 0,
+    },
+  };
+  const valueScale = {
+    beginAtZero: true,
+    max: 100,
+    grid: { color: "#e6ece9" },
+    ticks: { color: "#71807b" },
+    title: {
+      display: true,
+      text: visualization.yAxisLabel,
+      color: "#71807b",
+    },
+  };
+  new Chart(canvas.getContext("2d"), {
+    type: visualization.chartType,
+    data: {
+      labels,
+      datasets: [
+        {
+          label: visualization.yAxisLabel,
+          data: visualization.points.map((point) => point.value),
+          borderColor: "#176b5d",
+          backgroundColor:
+            visualization.chartType === "bar"
+              ? "rgba(23, 107, 93, 0.78)"
+              : "rgba(23, 107, 93, 0.12)",
+          borderWidth: 2,
+          borderRadius: 7,
+          pointBackgroundColor: "#ffffff",
+          pointBorderColor: "#176b5d",
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          fill: visualization.chartType === "line",
+          tension: 0.28,
+        },
+      ],
+    },
+    options: {
+      indexAxis: isTopicComparison ? "y" : "x",
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            title: (contexts) =>
+              fullLabels[contexts[0].dataIndex],
+            afterLabel: (context) =>
+              visualization.points[context.dataIndex].detail || "",
+          },
+        },
+      },
+      scales: isTopicComparison
+        ? { x: valueScale, y: categoryScale }
+        : { x: categoryScale, y: valueScale },
+    },
+  });
 }
 
 function resizeChatInput() {
@@ -456,8 +591,11 @@ async function sendChatMessage() {
         ? `${data.model} · Groq`
         : data.provider === "local"
           ? `${data.model} · Local`
-          : "Local fallback";
-    addChatMessage(data.reply, "incoming");
+          : "Built-in answer";
+    const assistantMessage = addChatMessage(data.reply, "incoming");
+    if (data.visualization) {
+      renderChatVisualization(assistantMessage, data.visualization);
+    }
     chatHistory.push({ role: "assistant", content: data.reply });
   } catch (error) {
     pendingMessage.remove();
@@ -470,6 +608,7 @@ async function sendChatMessage() {
 }
 
 // UI wiring and initial page load.
+loadChatConfig();
 topicSelect.addEventListener("change", () => {
   updateChatTopicContext();
   loadScores(topicSelect.value);

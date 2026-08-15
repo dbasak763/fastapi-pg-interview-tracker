@@ -97,9 +97,9 @@ The default Groq model policy is:
 
 | Intent | Model | Reason |
 | --- | --- | --- |
-| Lookup | `llama-3.1-8b-instant` | Fast tool selection and concise answers |
-| Analysis | `llama-3.3-70b-versatile` | Stronger comparisons and coaching |
-| Visualization | `openai/gpt-oss-20b` | Tool use plus structured presentation |
+| Lookup | local `qwen3:8b`, then `openai/gpt-oss-20b` | Private, fast tool selection with hosted fallback |
+| Analysis | `openai/gpt-oss-120b` | Stronger comparisons and coaching |
+| Visualization | `openai/gpt-oss-120b` | Explains validated data while the browser renders the chart |
 
 All model names and provider preferences are environment overrides.
 
@@ -117,8 +117,13 @@ References:
 - [LangGraph workflows and routing](https://docs.langchain.com/oss/python/langgraph/workflows-agents)
 
 Local inference is opt-in with `LOCAL_LLM_ENABLED=true`. The default preference
-routes visualization requests to local `qwen3:8b`, while lookups and analysis
-remain on their Groq models. Every route can be changed in `.env`.
+routes simple lookups to local `qwen3:8b`, while analysis and visualization
+explanations use their Groq models. Every route can be changed in `.env`.
+
+The visualization route does not ask either model to draw. FastAPI derives a
+bounded `bar` or `line` chart specification from validated PostgreSQL query
+results, and the browser renders that data with Chart.js. The routed model only
+explains the important pattern in prose.
 
 Provider execution follows a bounded availability policy:
 
