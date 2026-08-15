@@ -23,8 +23,9 @@ server-side and is never sent to the browser.
 - [x] Understand and document the Groq API surface, including the Groq
       architecture and the current Swagger/OpenAPI-derived tool integration.
       See [LLM architecture](docs/llm-architecture.md).
-- [ ] Evaluate LLM request routing with LangChain and LangGraph, including when
-      a graph-based workflow is more useful than the current direct tool flow.
+- [x] Route lookup, analysis, and visualization requests through a deterministic
+      LangGraph workflow. LangGraph is used without LangChain because the app
+      already owns its prompts, tools, and validated execution loop.
 - [ ] Run a local LLM and evaluate a model router that can send different
       request types (for example, data lookup, analysis, and visualization) to
       different models, coordinated through LangChain or LangGraph.

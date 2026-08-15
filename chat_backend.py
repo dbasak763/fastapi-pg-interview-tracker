@@ -204,6 +204,7 @@ def run_provider_tool_chat(
     tools: List[dict],
     approved_operations: Dict[str, ApprovedOperation],
     db: Session,
+    request_intent: str = "lookup",
 ) -> ToolChatResult:
     """Run a provider-neutral flow: select data first, explain it second."""
 
@@ -313,6 +314,17 @@ def run_provider_tool_chat(
         "is unavailable. Be concise but complete, and do not discuss tool "
         "names unless the user asks."
     )
+    if request_intent == "analysis":
+        answer_prompt += (
+            " For analysis requests, separate observed evidence from coaching "
+            "advice and connect every recommendation to the returned data."
+        )
+    elif request_intent == "visualization":
+        answer_prompt += (
+            " For visualization requests, include a compact Markdown table of "
+            "the values to plot and clearly name the suggested chart type, x "
+            "axis, and y axis."
+        )
     messages[0] = {"role": "system", "content": answer_prompt}
     final_message = _provider_completion(
         provider=provider,
@@ -352,4 +364,5 @@ def run_groq_tool_chat(
         tools=tools,
         approved_operations=approved_operations,
         db=db,
+        request_intent="lookup",
     )

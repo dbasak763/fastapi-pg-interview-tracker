@@ -71,3 +71,35 @@ flowchart LR
 This boundary keeps the tool loop identical for Groq and OpenAI-compatible
 local servers. Provider selection belongs to the LangGraph workflow described
 in the next roadmap item, not to the database or tool executors.
+
+## LangGraph routing
+
+`llm_router.py` compiles a three-branch graph once:
+
+```mermaid
+flowchart LR
+    Request --> Classify
+    Classify -->|lookup| Lookup
+    Classify -->|analysis| Analysis
+    Classify -->|visualization| Visualization
+    Lookup --> Provider
+    Analysis --> Provider
+    Visualization --> Provider
+```
+
+The classifier is deterministic rather than model-based. This avoids spending
+tokens on routing, prevents a routing model from inventing destinations, and
+makes every branch unit-testable. LangGraph still provides an explicit workflow
+boundary where retries, persistence, streaming, or human review can be added
+later.
+
+The default Groq model policy is:
+
+| Intent | Model | Reason |
+| --- | --- | --- |
+| Lookup | `llama-3.1-8b-instant` | Fast tool selection and concise answers |
+| Analysis | `llama-3.3-70b-versatile` | Stronger comparisons and coaching |
+| Visualization | `openai/gpt-oss-20b` | Tool use plus structured presentation |
+
+All model names are environment overrides. The next section adds a local
+provider preference without changing this graph.
