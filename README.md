@@ -20,8 +20,9 @@ server-side and is never sent to the browser.
 
 ## LLM roadmap
 
-- [ ] Understand and document the Groq API surface, including the Groq
+- [x] Understand and document the Groq API surface, including the Groq
       architecture and the current Swagger/OpenAPI-derived tool integration.
+      See [LLM architecture](docs/llm-architecture.md).
 - [ ] Evaluate LLM request routing with LangChain and LangGraph, including when
       a graph-based workflow is more useful than the current direct tool flow.
 - [ ] Run a local LLM and evaluate a model router that can send different
