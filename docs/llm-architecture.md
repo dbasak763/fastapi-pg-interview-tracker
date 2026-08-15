@@ -97,9 +97,9 @@ The default Groq model policy is:
 
 | Intent | Model | Reason |
 | --- | --- | --- |
-| Lookup | `llama-3.1-8b-instant` | Fast tool selection and concise answers |
-| Analysis | `llama-3.3-70b-versatile` | Stronger comparisons and coaching |
-| Visualization | `openai/gpt-oss-20b` | Tool use plus structured presentation |
+| Lookup | local `qwen3:8b`, then `openai/gpt-oss-20b` | Private, fast tool selection with hosted fallback |
+| Analysis | `openai/gpt-oss-120b` | Stronger comparisons and coaching |
+| Visualization | `openai/gpt-oss-120b` | Explains validated data while the browser renders the chart |
 
 All model names and provider preferences are environment overrides.
 

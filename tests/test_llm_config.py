@@ -28,9 +28,34 @@ class LLMSettingsTests(unittest.TestCase):
 
         lookup = settings.build_provider("groq", "lookup")
         analysis = settings.build_provider("groq", "analysis")
+        visualization = settings.build_provider("groq", "visualization")
 
-        self.assertEqual(lookup.model, "llama-3.1-8b-instant")
-        self.assertEqual(analysis.model, "llama-3.3-70b-versatile")
+        self.assertEqual(lookup.model, "openai/gpt-oss-20b")
+        self.assertEqual(analysis.model, "openai/gpt-oss-120b")
+        self.assertEqual(visualization.model, "openai/gpt-oss-120b")
+
+    def test_legacy_model_does_not_override_route_models(self):
+        settings = LLMSettings.from_env(
+            {
+                "GROQ_API_KEY": "test-key",
+                "GROQ_MODEL": "legacy-model",
+            }
+        )
+
+        self.assertEqual(
+            settings.build_provider("groq", "lookup").model,
+            "openai/gpt-oss-20b",
+        )
+
+    def test_prefers_local_only_for_simple_lookups(self):
+        settings = LLMSettings.from_env({})
+
+        self.assertEqual(settings.provider_preferences["lookup"], "local")
+        self.assertEqual(settings.provider_preferences["analysis"], "groq")
+        self.assertEqual(
+            settings.provider_preferences["visualization"],
+            "groq",
+        )
 
     def test_provider_order_places_route_first_and_has_no_duplicates(self):
         settings = LLMSettings.from_env(
