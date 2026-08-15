@@ -99,7 +99,7 @@ class ChatBackendTests(unittest.TestCase):
 
         self.assertEqual(self.executed, [])
 
-    @patch("chat_backend._groq_completion")
+    @patch("chat_backend._provider_completion")
     def test_tool_call_is_executed_then_returned_to_model(self, completion):
         completion.side_effect = [
             {

@@ -1,16 +1,17 @@
-"""Safe LLM-to-database orchestration for the dashboard chat.
+"""Safe provider-to-database orchestration for the dashboard chat.
 
 This module never queries PostgreSQL directly. Its job is to:
 
 1. Convert approved FastAPI OpenAPI operations into LLM tool definitions.
-2. Ask Groq/Llama to choose one tool for the user's question.
+2. Ask an OpenAI-compatible chat model to choose one tool for the question.
 3. Validate the selected tool and its arguments on the server.
 4. Call an approved executor supplied by ``main.py``.
-5. Give the executor's structured result back to Llama for explanation.
+5. Give the executor's structured result back to the model for explanation.
 
 The database session and approved executors come from ``main.py``. Keeping the
-allowlist and validation between Llama and the database prevents arbitrary SQL
-and prevents the model from calling create, update, or delete operations.
+allowlist and validation between every provider and the database prevents
+arbitrary SQL and prevents models from calling create, update, or delete
+operations.
 """
 
 import json
@@ -33,6 +34,17 @@ class ApprovedOperation:
 
     arguments_model: Type[BaseModel]
     executor: Callable[[BaseModel, Session], Any]
+
+
+@dataclass(frozen=True)
+class ChatProvider:
+    """One OpenAI-compatible chat-completions provider and model."""
+
+    name: str
+    api_key: str
+    base_url: str
+    model: str
+    timeout_seconds: float = 30.0
 
 
 @dataclass(frozen=True)
@@ -147,16 +159,14 @@ def execute_approved_operation(
     return operation.executor(validated, db)
 
 
-def _groq_completion(
+def _provider_completion(
     *,
-    api_key: str,
-    base_url: str,
-    model: str,
+    provider: ChatProvider,
     messages: List[dict],
     tools: List[dict],
 ) -> dict:
     request_body = {
-        "model": model,
+        "model": provider.model,
         "messages": messages,
         "temperature": 0.1,
         "max_tokens": 600,
@@ -173,31 +183,30 @@ def _groq_completion(
         )
 
     response = httpx.post(
-        f"{base_url.rstrip('/')}/chat/completions",
+        f"{provider.base_url.rstrip('/')}/chat/completions",
         headers={
-            "Authorization": f"Bearer {api_key}",
+            "Authorization": f"Bearer {provider.api_key}",
             "Content-Type": "application/json",
         },
         json=request_body,
-        timeout=30,
+        timeout=provider.timeout_seconds,
     )
     response.raise_for_status()
     return response.json()["choices"][0]["message"]
 
 
-def run_groq_tool_chat(
+def run_provider_tool_chat(
     *,
-    api_key: str,
-    base_url: str,
-    model: str,
+    provider: ChatProvider,
     message: str,
     focus_topic: Optional[str],
     history: List[dict],
     tools: List[dict],
     approved_operations: Dict[str, ApprovedOperation],
     db: Session,
+    request_intent: str = "lookup",
 ) -> ToolChatResult:
-    """Run the two-call chat flow: select data first, explain it second."""
+    """Run a provider-neutral flow: select data first, explain it second."""
 
     selected_topic = focus_topic or "none"
 
@@ -228,10 +237,8 @@ def run_groq_tool_chat(
         {"role": "user", "content": message},
     ]
     operations_used = []
-    assistant_message = _groq_completion(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
+    assistant_message = _provider_completion(
+        provider=provider,
         messages=messages,
         tools=tools,
     )
@@ -284,7 +291,7 @@ def run_groq_tool_chat(
 
     # PHASE 3 — ANSWER GENERATION
     # Replace the routing instructions with answer instructions. The second
-    # Groq call receives no tools, so it can only explain the validated result.
+    # The final call receives no tools, so it can only explain validated data.
     answer_prompt = (
         "You are writing the final Interview Tracker dashboard answer. The "
         "tool result in this conversation is the only source of factual data; "
@@ -307,11 +314,20 @@ def run_groq_tool_chat(
         "is unavailable. Be concise but complete, and do not discuss tool "
         "names unless the user asks."
     )
+    if request_intent == "analysis":
+        answer_prompt += (
+            " For analysis requests, separate observed evidence from coaching "
+            "advice and connect every recommendation to the returned data."
+        )
+    elif request_intent == "visualization":
+        answer_prompt += (
+            " For visualization requests, include a compact Markdown table of "
+            "the values to plot and clearly name the suggested chart type, x "
+            "axis, and y axis."
+        )
     messages[0] = {"role": "system", "content": answer_prompt}
-    final_message = _groq_completion(
-        api_key=api_key,
-        base_url=base_url,
-        model=model,
+    final_message = _provider_completion(
+        provider=provider,
         messages=messages,
         tools=[],
     )
@@ -319,3 +335,34 @@ def run_groq_tool_chat(
     if not reply:
         raise ChatToolError("The model returned an empty final response")
     return ToolChatResult(reply=reply, operations=operations_used)
+
+
+def run_groq_tool_chat(
+    *,
+    api_key: str,
+    base_url: str,
+    model: str,
+    message: str,
+    focus_topic: Optional[str],
+    history: List[dict],
+    tools: List[dict],
+    approved_operations: Dict[str, ApprovedOperation],
+    db: Session,
+) -> ToolChatResult:
+    """Compatibility wrapper for the original Groq-only application path."""
+
+    return run_provider_tool_chat(
+        provider=ChatProvider(
+            name="groq",
+            api_key=api_key,
+            base_url=base_url,
+            model=model,
+        ),
+        message=message,
+        focus_topic=focus_topic,
+        history=history,
+        tools=tools,
+        approved_operations=approved_operations,
+        db=db,
+        request_intent="lookup",
+    )

@@ -14,7 +14,6 @@ data, database queries, and the decision about which operations are approved.
 """
 
 import logging
-import os
 import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -37,8 +36,10 @@ from chat_backend import (
     ApprovedOperation,
     ChatToolError,
     build_tools_from_openapi,
-    run_groq_tool_chat,
+    run_provider_tool_chat,
 )
+from llm_config import LLMSettings
+from llm_router import route_llm_request
 
 logger = logging.getLogger(__name__)
 
@@ -265,6 +266,7 @@ class ChatResponse(BaseModel):
     reply: str
     provider: str = "local-fallback"
     model: Optional[str] = None
+    route: Optional[str] = None
     operations: List[str] = Field(default_factory=list)
 
 
@@ -805,18 +807,18 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
       if the key is missing or Groq/tool execution fails, use deterministic
       local query rules below so basic dashboard questions still work.
     """
-    model = os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
-    api_key = os.getenv("GROQ_API_KEY")
-    if api_key:
+    settings = LLMSettings.from_env()
+    decision = route_llm_request(
+        payload.message,
+        available_providers=settings.available_provider_names(),
+        preferences=settings.provider_preferences,
+    )
+    for provider_name in settings.provider_order(decision.provider):
+        provider = settings.build_provider(provider_name, decision.intent)
         try:
             # app.state.chat_tools was built once from OpenAPI during startup.
-            result = run_groq_tool_chat(
-                api_key=api_key,
-                base_url=os.getenv(
-                    "GROQ_BASE_URL",
-                    "https://api.groq.com/openai/v1",
-                ),
-                model=model,
+            result = run_provider_tool_chat(
+                provider=provider,
                 message=payload.message,
                 focus_topic=payload.focus_topic,
                 history=[
@@ -826,11 +828,13 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
                 tools=app.state.chat_tools,
                 approved_operations=APPROVED_CHAT_OPERATIONS,
                 db=db,
+                request_intent=decision.intent,
             )
             return ChatResponse(
                 reply=result.reply,
-                provider="groq",
-                model=model,
+                provider=provider.name,
+                model=provider.model,
+                route=decision.intent,
                 operations=result.operations,
             )
         except (
@@ -840,8 +844,12 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             TypeError,
             ValueError,
         ) as exc:
-            # Keep the dashboard useful during provider outages or bad keys.
-            logger.warning("Groq tool chat failed: %s", type(exc).__name__)
+            # Try the other configured provider before deterministic fallback.
+            logger.warning(
+                "%s tool chat failed: %s",
+                provider.name,
+                type(exc).__name__,
+            )
 
     # LOCAL FALLBACK
     # Everything below this point is deterministic Python/SQLAlchemy logic. It
