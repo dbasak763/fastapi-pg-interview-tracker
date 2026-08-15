@@ -3,36 +3,64 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Score Progress</title>
-    <link rel="stylesheet" href="/static/dashboard.css" />
+    <meta name="theme-color" content="#f5f7fb" />
+    <title>Interview performance</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/static/dashboard.css?v=4" />
     <script
       src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
       defer
     ></script>
-    <script src="/static/dashboard.js?v=3" defer></script>
+    <script src="/static/dashboard.js?v=4" defer></script>
   </head>
   <body>
     <main class="container">
-      <header>
-        <h1>Score Progress</h1>
-        <p>See how your challenge score changes over time.</p>
+      <header class="page-header">
+        <div>
+          <p class="eyebrow">Interview tracker</p>
+          <h1>Performance overview</h1>
+          <p class="page-description">
+            Follow your score history and turn every attempt into a clearer next step.
+          </p>
+        </div>
+        <button id="refresh-topics" class="secondary-button" type="button">
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="M20 11a8 8 0 1 0-2.34 5.66M20 4v7h-7" />
+          </svg>
+          Refresh data
+        </button>
       </header>
 
-      <div class="topic-heading">
-        <label for="topic-select">Topic <span id="topic-count"></span></label>
-        <button id="refresh-topics" type="button">Refresh</button>
-      </div>
-      <select id="topic-select" disabled>
-        <option>Loading topics…</option>
-      </select>
+      <section class="topic-control" aria-labelledby="topic-label">
+        <div>
+          <label id="topic-label" for="topic-select">Focus topic</label>
+          <p>Choose a topic to inspect its score progression.</p>
+        </div>
+        <div class="select-wrap">
+          <select id="topic-select" disabled>
+            <option>Loading topics…</option>
+          </select>
+          <span id="topic-count" class="topic-count" aria-live="polite"></span>
+        </div>
+      </section>
 
-      <section class="card" aria-labelledby="chart-title">
+      <section class="card score-card" aria-labelledby="chart-title">
         <div class="chart-header">
           <div>
+            <p class="section-label">Selected topic</p>
             <h2 id="chart-title">Score history</h2>
             <p id="chart-summary">Loading scores…</p>
           </div>
-          <strong id="latest-score">—</strong>
+          <div class="score-highlight">
+            <span>Latest score</span>
+            <strong id="latest-score">—</strong>
+            <small>out of 100</small>
+          </div>
         </div>
 
         <div class="chart-container">
@@ -47,8 +75,14 @@
         </div>
       </section>
 
-      <section class="card" aria-labelledby="attempts-title">
-        <h2 id="attempts-title">Attempts</h2>
+      <section class="card attempts-card" aria-labelledby="attempts-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-label">History</p>
+            <h2 id="attempts-title">Recent attempts</h2>
+          </div>
+          <p>Newest first</p>
+        </div>
         <div class="table-wrap">
           <table>
             <thead>
@@ -58,11 +92,11 @@
                 <th>Company</th>
                 <th>Role</th>
                 <th>Focus</th>
-                <th>Attempt Source</th>
+                <th>Source</th>
                 <th>Status</th>
-                <th>Round Number</th>
-                <th>Started At</th>
-                <th>Completed At</th>
+                <th>Round</th>
+                <th>Started</th>
+                <th>Completed</th>
                 <th>Notes</th>
                 <th>Score</th>
               </tr>
@@ -73,44 +107,132 @@
       </section>
     </main>
 
-    <div id="chat-panel" class="chat-panel">
-      <div class="chat-header">
-        <div>
-          <span>Dashboard Chat</span>
-          <small id="chat-provider-status">Local fallback</small>
+    <section
+      id="chat-panel"
+      class="chat-panel hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="chat-title"
+      aria-hidden="true"
+    >
+      <header class="chat-header">
+        <div class="chat-brand">
+          <div class="chat-mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path d="M12 3 10.4 8.4 5 10l5.4 1.6L12 17l1.6-5.4L19 10l-5.4-1.6L12 3Z" />
+              <path d="m18 15-.7 2.3L15 18l2.3.7L18 21l.7-2.3L21 18l-2.3-.7L18 15Z" />
+            </svg>
+          </div>
+          <div>
+            <h2 id="chat-title">Interview insights</h2>
+            <div class="provider-line">
+              <span class="status-dot" aria-hidden="true"></span>
+              <span id="chat-provider-status">Local fallback</span>
+            </div>
+          </div>
         </div>
         <button
           id="close-chat"
+          class="icon-button"
           type="button"
-          aria-label="Close dashboard chat"
+          aria-label="Close interview insights"
         >
-          &times;
+          <svg aria-hidden="true" viewBox="0 0 24 24">
+            <path d="m6 6 12 12M18 6 6 18" />
+          </svg>
         </button>
-      </div>
-      <div id="chat-body" class="chat-body" aria-live="polite">
-        <div class="chat-message incoming">
-          Hello! Ask me about your latest score, progress, attempts, or topics.
+      </header>
+
+      <div class="chat-workspace">
+        <aside class="chat-sidebar" aria-label="Chat context and suggestions">
+          <div class="context-card">
+            <span class="context-label">Current context</span>
+            <strong id="chat-topic-context">Loading topic…</strong>
+            <p>The assistant uses this selection when you say “this topic.”</p>
+          </div>
+
+          <div class="suggestion-list">
+            <p>Try asking</p>
+            <button class="prompt-suggestion" type="button" data-prompt="How has my performance changed for this topic?">
+              <span>Summarize my progress</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+            <button class="prompt-suggestion" type="button" data-prompt="Which topic is my weakest, and what should I focus on next?">
+              <span>Find my weakest topic</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+            <button class="prompt-suggestion" type="button" data-prompt="Show every attempt for this topic and the change between each score.">
+              <span>Review every attempt</span>
+              <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6" /></svg>
+            </button>
+          </div>
+
+          <p class="privacy-note">
+            <svg aria-hidden="true" viewBox="0 0 24 24">
+              <path d="M7 10V8a5 5 0 0 1 10 0v2M6 10h12v10H6z" />
+            </svg>
+            Your API key stays on the server.
+          </p>
+        </aside>
+
+        <div class="chat-conversation">
+          <div id="chat-body" class="chat-body" aria-live="polite">
+            <div class="chat-welcome">
+              <div class="welcome-mark" aria-hidden="true">
+                <svg viewBox="0 0 24 24">
+                  <path d="M12 3 10.4 8.4 5 10l5.4 1.6L12 17l1.6-5.4L19 10l-5.4-1.6L12 3Z" />
+                </svg>
+              </div>
+              <p class="message-author">Interview insights</p>
+              <h3>What would you like to understand?</h3>
+              <p>
+                Ask about score changes, attempt history, topic comparisons, or where to focus next.
+              </p>
+            </div>
+          </div>
+
+          <div class="chat-footer">
+            <div class="composer">
+              <textarea
+                id="chat-input"
+                rows="1"
+                maxlength="1000"
+                placeholder="Ask about your interview performance…"
+                aria-label="Chat message"
+              ></textarea>
+              <button id="send-chat" type="button" aria-label="Send message">
+                <svg aria-hidden="true" viewBox="0 0 24 24">
+                  <path d="m5 12 14-7-4 14-3-5-7-2Z" />
+                  <path d="m12 14 7-9" />
+                </svg>
+              </button>
+            </div>
+            <p>Enter to send <span aria-hidden="true">·</span> Shift + Enter for a new line</p>
+          </div>
         </div>
       </div>
-      <div class="chat-footer">
-        <input
-          id="chat-input"
-          type="text"
-          maxlength="1000"
-          placeholder="Ask about your progress…"
-          aria-label="Chat message"
-        />
-        <button id="send-chat" type="button">Send</button>
-      </div>
-    </div>
+    </section>
 
     <button
       id="open-chat"
-      class="open-chat-button hidden"
+      class="open-chat-button"
       type="button"
-      aria-label="Open dashboard chat"
+      aria-label="Open interview insights in full screen"
+      aria-controls="chat-panel"
+      aria-expanded="false"
     >
-      Chat
+      <span class="launcher-mark" aria-hidden="true">
+        <svg viewBox="0 0 24 24">
+          <path d="M12 3 10.4 8.4 5 10l5.4 1.6L12 17l1.6-5.4L19 10l-5.4-1.6L12 3Z" />
+        </svg>
+      </span>
+      <span>
+        <strong>Ask your data</strong>
+        <small>Open interview insights</small>
+      </span>
+      <svg class="launcher-arrow" aria-hidden="true" viewBox="0 0 24 24">
+        <path d="m9 18 6-6-6-6" />
+      </svg>
     </button>
   </body>
 </html>
