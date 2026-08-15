@@ -273,6 +273,18 @@ class ChatResponse(BaseModel):
     operations: List[str] = Field(default_factory=list)
 
 
+class ChatRouteConfig(BaseModel):
+    provider: str
+    model: Optional[str] = None
+
+
+class ChatConfigResponse(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    available_providers: List[str]
+    routes: Dict[str, ChatRouteConfig]
+
+
 # ---------------------------------------------------------------------------
 # LLM TOOL ARGUMENT SCHEMAS
 # These schemas are stricter than the public routes. They define exactly what
@@ -796,6 +808,37 @@ APPROVED_CHAT_OPERATIONS: Dict[str, ApprovedOperation] = {
         executor=_execute_topic_progression,
     ),
 }
+
+
+@app.get(
+    "/api/dashboard/chat/config",
+    response_model=ChatConfigResponse,
+    response_model_by_alias=True,
+    include_in_schema=False,
+)
+def dashboard_chat_config():
+    """Return the active routing plan without exposing provider credentials."""
+
+    settings = LLMSettings.from_env()
+    available = settings.available_provider_names()
+    routes: Dict[str, ChatRouteConfig] = {}
+    for intent in ("lookup", "analysis", "visualization"):
+        provider_order = settings.provider_order(
+            settings.provider_preferences[intent]
+        )
+        if not provider_order:
+            routes[intent] = ChatRouteConfig(provider="fallback")
+            continue
+        provider = settings.build_provider(provider_order[0], intent)
+        routes[intent] = ChatRouteConfig(
+            provider=provider.name,
+            model=provider.model,
+        )
+
+    return ChatConfigResponse(
+        available_providers=list(available),
+        routes=routes,
+    )
 
 
 @app.post("/api/dashboard/chat", response_model=ChatResponse)

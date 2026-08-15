@@ -278,6 +278,30 @@ function updateChatTopicContext() {
   chatTopicContext.textContent = topicSelect.value || "All interview data";
 }
 
+async function loadChatConfig() {
+  try {
+    const response = await fetch("/api/dashboard/chat/config");
+    if (!response.ok) {
+      throw new Error("Routing configuration is unavailable.");
+    }
+    const { availableProviders, routes } = await response.json();
+    if (!availableProviders.length) {
+      chatProviderStatus.textContent = "Deterministic fallback";
+      return;
+    }
+
+    const providerLabels = availableProviders.map((provider) =>
+      provider === "groq" ? "Groq" : provider === "local" ? "Local" : provider,
+    );
+    chatProviderStatus.textContent = `Automatic · ${providerLabels.join(" + ")}`;
+    chatProviderStatus.title = Object.entries(routes)
+      .map(([intent, route]) => `${intent}: ${route.model || route.provider}`)
+      .join(" · ");
+  } catch {
+    chatProviderStatus.textContent = "Automatic routing";
+  }
+}
+
 function appendInlineFormatting(parent, text) {
   const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
   parts.filter(Boolean).forEach((part) => {
@@ -470,6 +494,7 @@ async function sendChatMessage() {
 }
 
 // UI wiring and initial page load.
+loadChatConfig();
 topicSelect.addEventListener("change", () => {
   updateChatTopicContext();
   loadScores(topicSelect.value);
