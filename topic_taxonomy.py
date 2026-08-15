@@ -12,6 +12,7 @@ from typing import Optional
 TOPIC_CATEGORIES = (
     "Algorithms & Data Structures",
     "Behavioral & Communication",
+    "Programming & Code Quality",
     "Computer Vision",
     "Data & Feature Platforms",
     "Deep Learning",
@@ -30,11 +31,21 @@ CATEGORY_PHRASES = (
         (
             "communication skills",
             "motivation alignment",
+            "motivation and fit",
             "resume professional background",
             "resume and professional background",
             "recruiter screen",
             "conflict collaboration",
             "working style",
+        ),
+    ),
+    (
+        "Programming & Code Quality",
+        (
+            "code quality",
+            "readability and maintainability",
+            "platform familiarity",
+            "resource utilization and documentation",
         ),
     ),
     (
