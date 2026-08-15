@@ -264,6 +264,22 @@ class ChatRequest(BaseModel):
     history: List[ChatHistoryMessage] = Field(default_factory=list, max_length=12)
 
 
+class ChatVisualizationPoint(BaseModel):
+    label: str = Field(max_length=120)
+    value: float = Field(ge=0, le=100)
+    detail: Optional[str] = Field(default=None, max_length=200)
+
+
+class ChatVisualization(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    chart_type: Literal["bar", "line"]
+    title: str = Field(max_length=200)
+    x_axis_label: str = Field(max_length=80)
+    y_axis_label: str = Field(max_length=80)
+    points: List[ChatVisualizationPoint] = Field(max_length=40)
+
+
 class ChatResponse(BaseModel):
     # ``operations`` is an audit/debug trace. The browser currently displays
     # the reply and provider/model but does not render this trace.
@@ -272,6 +288,7 @@ class ChatResponse(BaseModel):
     model: Optional[str] = None
     route: Optional[str] = None
     operations: List[str] = Field(default_factory=list)
+    visualization: Optional[ChatVisualization] = None
 
 
 class ChatRouteConfig(BaseModel):
@@ -855,6 +872,74 @@ def dashboard_chat_config():
     )
 
 
+def _build_chat_visualization(
+    payload: ChatRequest,
+    intent: str,
+    db: Session,
+) -> Optional[ChatVisualization]:
+    """Build validated chart data directly from PostgreSQL query results."""
+
+    if intent != "visualization":
+        return None
+
+    words = set(re.findall(r"[a-z]+", payload.message.lower()))
+    chart_type: Literal["bar", "line"] = (
+        "bar" if words.intersection({"bar", "histogram"}) else "line"
+    )
+    compares_topics = bool(words.intersection({"topic", "topics"})) and bool(
+        words.intersection(
+            {"all", "compare", "comparison", "strongest", "weakest"}
+        )
+    )
+
+    if compares_topics or not payload.focus_topic:
+        summaries = topic_summaries(db)
+        if not summaries:
+            return None
+        if "strongest" in words:
+            selected = list(reversed(summaries[-12:]))
+            title = "Strongest topics by average score"
+        else:
+            selected = summaries[:12]
+            title = "Topic average scores"
+        return ChatVisualization(
+            chart_type="bar",
+            title=title,
+            x_axis_label="Focus topic",
+            y_axis_label="Average score",
+            points=[
+                ChatVisualizationPoint(
+                    label=summary.focus_topic,
+                    value=summary.average_score,
+                    detail=(
+                        f"{summary.attempt_count} "
+                        f"{'attempt' if summary.attempt_count == 1 else 'attempts'}"
+                    ),
+                )
+                for summary in selected
+            ],
+        )
+
+    try:
+        progression = topic_score_progression(payload.focus_topic, db)
+    except HTTPException:
+        return None
+    return ChatVisualization(
+        chart_type=chart_type,
+        title=f"{payload.focus_topic} score progression",
+        x_axis_label="Date",
+        y_axis_label="Score",
+        points=[
+            ChatVisualizationPoint(
+                label=point.attempted_date.isoformat(),
+                value=point.score,
+                detail=point.company or "Unknown company",
+            )
+            for point in progression.points[-40:]
+        ],
+    )
+
+
 @app.post("/api/dashboard/chat", response_model=ChatResponse)
 def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
     """Answer a dashboard question using approved read tools and PostgreSQL.
@@ -873,6 +958,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         available_providers=settings.available_provider_names(),
         preferences=settings.provider_preferences,
     )
+    visualization = _build_chat_visualization(payload, decision.intent, db)
     for provider_name in settings.provider_order(decision.provider):
         provider = settings.build_provider(provider_name, decision.intent)
         try:
@@ -896,6 +982,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
                 model=provider.model,
                 route=decision.intent,
                 operations=result.operations,
+                visualization=visualization,
             )
         except (
             httpx.HTTPError,
@@ -933,9 +1020,13 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
                     f"averaging {weakest.average_score:.1f} across "
                     f"{weakest.attempt_count} "
                     f"{'attempt' if weakest.attempt_count == 1 else 'attempts'}."
-                )
+                ),
+                visualization=visualization,
             )
-        return ChatResponse(reply="You do not have any scored topics yet.")
+        return ChatResponse(
+            reply="You do not have any scored topics yet.",
+            visualization=visualization,
+        )
 
     scored_query = db.query(InterviewAttempt).filter(
         InterviewAttempt.status == "complete",
@@ -960,7 +1051,8 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             reply=(
                 "Hello! I can summarize your latest score, progress, attempt "
                 "count, or available topics."
-            )
+            ),
+            visualization=visualization,
         )
 
     if "topic" in message and any(
@@ -983,12 +1075,14 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
                 f"Your scored topics are: {', '.join(names)}."
                 if names
                 else "You do not have any scored topics yet."
-            )
+            ),
+            visualization=visualization,
         )
 
     if not attempts:
         return ChatResponse(
-            reply=f"I could not find any completed scored attempts{topic_label}."
+            reply=f"I could not find any completed scored attempts{topic_label}.",
+            visualization=visualization,
         )
 
     first = attempts[0]
@@ -1002,7 +1096,8 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             reply=(
                 f"Your latest score{topic_label} is {latest_score:.1f}, from "
                 f"{latest.attempted_date:%B %d, %Y}."
-            )
+            ),
+            visualization=visualization,
         )
 
     if any(word in message for word in ("progress", "improve", "change", "trend")):
@@ -1012,7 +1107,8 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
                 f"Across {len(attempts)} completed attempts{topic_label}, your "
                 f"score is {direction} {abs(change):.1f} points—from "
                 f"{first_score:.1f} to {latest_score:.1f}."
-            )
+            ),
+            visualization=visualization,
         )
 
     if any(word in message for word in ("attempt", "count", "many")):
@@ -1020,7 +1116,8 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             reply=(
                 f"You have {len(attempts)} completed scored "
                 f"{'attempt' if len(attempts) == 1 else 'attempts'}{topic_label}."
-            )
+            ),
+            visualization=visualization,
         )
 
     return ChatResponse(
@@ -1028,5 +1125,6 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             f"I found {len(attempts)} completed attempts{topic_label}. Your "
             f"latest score is {latest_score:.1f}. Ask me about your latest "
             "score, progress, attempts, or topics."
-        )
+        ),
+        visualization=visualization,
     )

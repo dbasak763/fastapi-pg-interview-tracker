@@ -117,8 +117,13 @@ References:
 - [LangGraph workflows and routing](https://docs.langchain.com/oss/python/langgraph/workflows-agents)
 
 Local inference is opt-in with `LOCAL_LLM_ENABLED=true`. The default preference
-routes visualization requests to local `qwen3:8b`, while lookups and analysis
-remain on their Groq models. Every route can be changed in `.env`.
+routes simple lookups to local `qwen3:8b`, while analysis and visualization
+explanations use their Groq models. Every route can be changed in `.env`.
+
+The visualization route does not ask either model to draw. FastAPI derives a
+bounded `bar` or `line` chart specification from validated PostgreSQL query
+results, and the browser renders that data with Chart.js. The routed model only
+explains the important pattern in prose.
 
 Provider execution follows a bounded availability policy:
 

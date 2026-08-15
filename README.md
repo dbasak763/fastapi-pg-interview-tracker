@@ -71,12 +71,17 @@ the other configured provider once and then uses the deterministic fallback.
 | Analysis and coaching | Groq `openai/gpt-oss-120b` | Stronger comparisons and recommendations |
 | Visualization explanation | Groq `openai/gpt-oss-120b` | Stronger narrative around validated chart data |
 
+Visualization output is not model-generated HTML, SVG, or plotting code. The
+API builds a bounded, validated chart specification from PostgreSQL query
+results, and the dashboard renders it with Chart.js. This keeps labels and
+scores faithful to the database even when the model's prose is imperfect.
+
 Change `LLM_LOOKUP_PROVIDER`, `LLM_ANALYSIS_PROVIDER`, or
 `LLM_VISUALIZATION_PROVIDER` to `groq` or `local` to override the defaults.
 
-The server sends the selected topic's complete attempt records, aggregate
-statistics for every topic, and the last 10 chat messages. The API key remains
-server-side and is never sent to the browser.
+The server sends only the records needed by an approved dashboard tool, with
+large histories compacted and bounded, plus the last 10 chat messages. The API
+key remains server-side and is never sent to the browser.
 
 ## LLM roadmap
 

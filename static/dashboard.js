@@ -386,6 +386,97 @@ function addChatMessage(text, type, extraClass) {
   return message;
 }
 
+function renderChatVisualization(message, visualization) {
+  if (!window.Chart || !visualization.points.length) {
+    return;
+  }
+
+  const content = message.querySelector(".message-content");
+  const figure = document.createElement("figure");
+  figure.className = "chat-visualization";
+
+  const heading = document.createElement("figcaption");
+  const title = document.createElement("strong");
+  title.textContent = visualization.title;
+  const axes = document.createElement("span");
+  axes.textContent = `${visualization.xAxisLabel} · ${visualization.yAxisLabel}`;
+  heading.append(title, axes);
+
+  const canvasWrap = document.createElement("div");
+  canvasWrap.className = "chat-chart-canvas-wrap";
+  const canvas = document.createElement("canvas");
+  canvas.setAttribute("role", "img");
+  canvas.setAttribute(
+    "aria-label",
+    `${visualization.title}. ${visualization.points
+      .map((point) => `${point.label}: ${point.value}`)
+      .join(", ")}`,
+  );
+  canvasWrap.appendChild(canvas);
+  figure.append(heading, canvasWrap);
+  content.appendChild(figure);
+
+  const isDateAxis = visualization.xAxisLabel.toLowerCase() === "date";
+  const labels = visualization.points.map((point) =>
+    isDateAxis ? formatDate(point.label) : point.label,
+  );
+  new Chart(canvas.getContext("2d"), {
+    type: visualization.chartType,
+    data: {
+      labels,
+      datasets: [
+        {
+          label: visualization.yAxisLabel,
+          data: visualization.points.map((point) => point.value),
+          borderColor: "#176b5d",
+          backgroundColor:
+            visualization.chartType === "bar"
+              ? "rgba(23, 107, 93, 0.78)"
+              : "rgba(23, 107, 93, 0.12)",
+          borderWidth: 2,
+          borderRadius: 7,
+          pointBackgroundColor: "#ffffff",
+          pointBorderColor: "#176b5d",
+          pointBorderWidth: 2,
+          pointRadius: 4,
+          fill: visualization.chartType === "line",
+          tension: 0.28,
+        },
+      ],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            afterLabel: (context) =>
+              visualization.points[context.dataIndex].detail || "",
+          },
+        },
+      },
+      scales: {
+        x: {
+          grid: { display: false },
+          ticks: { color: "#71807b", maxRotation: 35, minRotation: 0 },
+        },
+        y: {
+          beginAtZero: true,
+          max: 100,
+          grid: { color: "#e6ece9" },
+          ticks: { color: "#71807b" },
+          title: {
+            display: true,
+            text: visualization.yAxisLabel,
+            color: "#71807b",
+          },
+        },
+      },
+    },
+  });
+}
+
 function resizeChatInput() {
   chatInput.style.height = "auto";
   chatInput.style.height = `${Math.min(chatInput.scrollHeight, 140)}px`;
@@ -480,8 +571,11 @@ async function sendChatMessage() {
         ? `${data.model} · Groq`
         : data.provider === "local"
           ? `${data.model} · Local`
-          : "Local fallback";
-    addChatMessage(data.reply, "incoming");
+          : "Built-in answer";
+    const assistantMessage = addChatMessage(data.reply, "incoming");
+    if (data.visualization) {
+      renderChatVisualization(assistantMessage, data.visualization);
+    }
     chatHistory.push({ role: "assistant", content: data.reply });
   } catch (error) {
     pendingMessage.remove();

@@ -383,9 +383,10 @@ def run_provider_tool_chat(
         )
     elif request_intent == "visualization":
         answer_prompt += (
-            " For visualization requests, include a compact Markdown table of "
-            "the values to plot and clearly name the suggested chart type, x "
-            "axis, and y axis."
+            " For visualization requests, briefly explain the most important "
+            "pattern in the returned data. The browser renders a validated "
+            "chart separately, so do not output a Markdown table, ASCII chart, "
+            "or plotting instructions."
         )
     messages[0] = {"role": "system", "content": answer_prompt}
     final_message = _provider_completion(
