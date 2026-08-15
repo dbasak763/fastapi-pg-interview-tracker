@@ -14,7 +14,6 @@ data, database queries, and the decision about which operations are approved.
 """
 
 import logging
-import os
 import re
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timezone
@@ -37,9 +36,9 @@ from chat_backend import (
     ApprovedOperation,
     ChatToolError,
     build_tools_from_openapi,
-    ChatProvider,
     run_provider_tool_chat,
 )
+from llm_config import LLMSettings
 from llm_router import route_llm_request
 
 logger = logging.getLogger(__name__)
@@ -808,39 +807,18 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
       if the key is missing or Groq/tool execution fails, use deterministic
       local query rules below so basic dashboard questions still work.
     """
-    api_key = os.getenv("GROQ_API_KEY")
+    settings = LLMSettings.from_env()
     decision = route_llm_request(
         payload.message,
-        available_providers=["groq"] if api_key else [],
+        available_providers=settings.available_provider_names(),
+        preferences=settings.provider_preferences,
     )
-    if api_key:
-        model_by_intent = {
-            "lookup": os.getenv(
-                "GROQ_LOOKUP_MODEL",
-                os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
-            ),
-            "analysis": os.getenv(
-                "GROQ_ANALYSIS_MODEL",
-                "llama-3.3-70b-versatile",
-            ),
-            "visualization": os.getenv(
-                "GROQ_VISUALIZATION_MODEL",
-                "openai/gpt-oss-20b",
-            ),
-        }
-        model = model_by_intent[decision.intent]
+    for provider_name in settings.provider_order(decision.provider):
+        provider = settings.build_provider(provider_name, decision.intent)
         try:
             # app.state.chat_tools was built once from OpenAPI during startup.
             result = run_provider_tool_chat(
-                provider=ChatProvider(
-                    name="groq",
-                    api_key=api_key,
-                    base_url=os.getenv(
-                        "GROQ_BASE_URL",
-                        "https://api.groq.com/openai/v1",
-                    ),
-                    model=model,
-                ),
+                provider=provider,
                 message=payload.message,
                 focus_topic=payload.focus_topic,
                 history=[
@@ -854,8 +832,8 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             )
             return ChatResponse(
                 reply=result.reply,
-                provider="groq",
-                model=model,
+                provider=provider.name,
+                model=provider.model,
                 route=decision.intent,
                 operations=result.operations,
             )
@@ -866,8 +844,12 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             TypeError,
             ValueError,
         ) as exc:
-            # Keep the dashboard useful during provider outages or bad keys.
-            logger.warning("Groq tool chat failed: %s", type(exc).__name__)
+            # Try the other configured provider before deterministic fallback.
+            logger.warning(
+                "%s tool chat failed: %s",
+                provider.name,
+                type(exc).__name__,
+            )
 
     # LOCAL FALLBACK
     # Everything below this point is deterministic Python/SQLAlchemy logic. It

@@ -452,7 +452,11 @@ async function sendChatMessage() {
     // The response also contains an ``operations`` audit trace. It is useful
     // for debugging but intentionally not displayed in the chat panel yet.
     chatProviderStatus.textContent =
-      data.provider === "groq" ? data.model : "Local fallback";
+      data.provider === "groq"
+        ? `${data.model} · Groq`
+        : data.provider === "local"
+          ? `${data.model} · Local`
+          : "Local fallback";
     addChatMessage(data.reply, "incoming");
     chatHistory.push({ role: "assistant", content: data.reply });
   } catch (error) {
