@@ -55,6 +55,25 @@ class ToolChatResult:
     operations: List[str]
 
 
+def describe_provider_error(error: Exception) -> str:
+    """Return safe HTTP diagnostics without response bodies or credentials."""
+
+    details = [type(error).__name__]
+    if not isinstance(error, httpx.HTTPStatusError):
+        return " ".join(details)
+
+    details.append(f"status={error.response.status_code}")
+    try:
+        provider_error = error.response.json().get("error", {})
+    except (ValueError, AttributeError):
+        provider_error = {}
+    if provider_error.get("type"):
+        details.append(f"type={provider_error['type']}")
+    if provider_error.get("code"):
+        details.append(f"code={provider_error['code']}")
+    return " ".join(details)
+
+
 OVERALL_SCOPE_WORDS = {
     "all",
     "across",

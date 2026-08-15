@@ -36,6 +36,7 @@ from chat_backend import (
     ApprovedOperation,
     ChatToolError,
     build_tools_from_openapi,
+    describe_provider_error,
     run_provider_tool_chat,
 )
 from llm_config import LLMSettings
@@ -905,9 +906,11 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         ) as exc:
             # Try the other configured provider before deterministic fallback.
             logger.warning(
-                "%s tool chat failed: %s",
+                "%s model %s failed for %s: %s",
                 provider.name,
-                type(exc).__name__,
+                provider.model,
+                decision.intent,
+                describe_provider_error(exc),
             )
 
     # LOCAL FALLBACK

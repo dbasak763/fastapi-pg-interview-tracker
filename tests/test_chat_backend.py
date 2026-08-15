@@ -1,12 +1,14 @@
 import unittest
 from unittest.mock import patch
 
+import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
 from chat_backend import (
     ApprovedOperation,
     ChatToolError,
     build_tools_from_openapi,
+    describe_provider_error,
     execute_approved_operation,
     run_groq_tool_chat,
     select_request_tools,
@@ -136,6 +138,33 @@ class ChatBackendTests(unittest.TestCase):
         )
 
         self.assertEqual(selected, tools)
+
+    def test_provider_error_description_includes_safe_groq_fields(self):
+        request = httpx.Request("POST", "https://api.example.invalid/chat")
+        response = httpx.Response(
+            413,
+            request=request,
+            json={
+                "error": {
+                    "type": "tokens",
+                    "code": "rate_limit_exceeded",
+                    "message": "Internal account details should not be logged",
+                }
+            },
+        )
+        error = httpx.HTTPStatusError(
+            "request failed",
+            request=request,
+            response=response,
+        )
+
+        description = describe_provider_error(error)
+
+        self.assertEqual(
+            description,
+            "HTTPStatusError status=413 type=tokens code=rate_limit_exceeded",
+        )
+        self.assertNotIn("account details", description)
 
     @patch("chat_backend._provider_completion")
     def test_tool_call_is_executed_then_returned_to_model(self, completion):
