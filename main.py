@@ -736,7 +736,20 @@ def _execute_score_timeline(
     arguments: EmptyToolArguments,
     db: Session,
 ) -> List[dict]:
-    return [_serialize_attempt(attempt) for attempt in score_timeline(db)]
+    # The public endpoint returns complete records. The LLM receives only the
+    # newest compact points so a large history cannot exceed provider limits.
+    attempts = score_timeline(db)[-25:]
+    return [
+        {
+            "attemptId": attempt.id,
+            "attemptedDate": attempt.attempted_date,
+            "company": attempt.company,
+            "role": attempt.role,
+            "focusTopic": attempt.focus_topic,
+            "score": float(attempt.score),
+        }
+        for attempt in attempts
+    ]
 
 
 def _execute_challenge_topics(

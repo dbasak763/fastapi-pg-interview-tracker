@@ -9,6 +9,7 @@ from chat_backend import (
     build_tools_from_openapi,
     execute_approved_operation,
     run_groq_tool_chat,
+    select_request_tools,
 )
 
 
@@ -98,6 +99,43 @@ class ChatBackendTests(unittest.TestCase):
             )
 
         self.assertEqual(self.executed, [])
+
+    def test_focused_question_only_exposes_topic_progression(self):
+        tools = [
+            {"type": "function", "function": {"name": "score_timeline"}},
+            {
+                "type": "function",
+                "function": {"name": "topic_score_progression"},
+            },
+        ]
+
+        selected = select_request_tools(
+            tools,
+            message="What is my latest score?",
+            focus_topic="System Design",
+        )
+
+        self.assertEqual(
+            [tool["function"]["name"] for tool in selected],
+            ["topic_score_progression"],
+        )
+
+    def test_overall_question_keeps_cross_topic_tools(self):
+        tools = [
+            {"type": "function", "function": {"name": "score_timeline"}},
+            {
+                "type": "function",
+                "function": {"name": "topic_score_progression"},
+            },
+        ]
+
+        selected = select_request_tools(
+            tools,
+            message="Review every attempt",
+            focus_topic="System Design",
+        )
+
+        self.assertEqual(selected, tools)
 
     @patch("chat_backend._provider_completion")
     def test_tool_call_is_executed_then_returned_to_model(self, completion):
