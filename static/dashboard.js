@@ -26,8 +26,13 @@ const sendChatButton = document.querySelector("#send-chat");
 const closeChatButton = document.querySelector("#close-chat");
 const openChatButton = document.querySelector("#open-chat");
 const chatProviderStatus = document.querySelector("#chat-provider-status");
+const chatTopicContext = document.querySelector("#chat-topic-context");
+const promptSuggestionButtons = document.querySelectorAll(".prompt-suggestion");
+const mainContent = document.querySelector(".container");
+const chatWelcome = document.querySelector(".chat-welcome");
 
 let scoreChart;
+let lastFocusedBeforeChat;
 
 // Attempts are cached so progression points can be enriched with the complete
 // attempt record without adding another request every time the topic changes.
@@ -64,12 +69,16 @@ function drawChart(points) {
         {
           label: "Score",
           data: points.map((point) => point.score),
-          borderColor: "#246bfd",
-          backgroundColor: "#246bfd",
-          borderWidth: 2,
-          pointRadius: 4,
-          pointHoverRadius: 6,
-          tension: 0.2,
+          borderColor: "#176b5d",
+          backgroundColor: "#176b5d",
+          borderWidth: 2.5,
+          pointBackgroundColor: "#ffffff",
+          pointBorderColor: "#176b5d",
+          pointBorderWidth: 2,
+          pointRadius: 4.5,
+          pointHoverRadius: 6.5,
+          fill: false,
+          tension: 0.28,
         },
       ],
     },
@@ -103,11 +112,15 @@ function drawChart(points) {
       scales: {
         x: {
           grid: { display: false },
+          border: { display: false },
+          ticks: { color: "#71807b", padding: 10 },
         },
         y: {
           min: 0,
           max: 100,
-          ticks: { stepSize: 20 },
+          border: { display: false },
+          grid: { color: "#edf0ef" },
+          ticks: { color: "#71807b", padding: 10, stepSize: 20 },
         },
       },
     },
@@ -219,11 +232,12 @@ async function refreshTopics() {
     
     const topics = await response.json();
     topicSelect.replaceChildren();
-    topicCount.textContent = `(${topics.length})`;
+    topicCount.textContent = `${topics.length} ${topics.length === 1 ? "topic" : "topics"}`;
 
     if (!topics.length) {
       topicSelect.append(new Option("No topics available", ""));
       topicSelect.disabled = true;
+      updateChatTopicContext();
       showMessage("No challenge scores found.");
       return;
     }
@@ -237,11 +251,13 @@ async function refreshTopics() {
     }
 
     topicSelect.disabled = false;
+    updateChatTopicContext();
     await loadScores(topicSelect.value);
   } catch (error) {
     topicSelect.replaceChildren(new Option("Topics unavailable", ""));
     topicCount.textContent = "";
     topicSelect.disabled = true;
+    updateChatTopicContext();
     showMessage(error.message);
   } finally {
     refreshTopicsButton.disabled = false;
@@ -258,16 +274,142 @@ function formatDateTime(value) {
   }).format(new Date(value));
 }
 
+function updateChatTopicContext() {
+  chatTopicContext.textContent = topicSelect.value || "All interview data";
+}
+
+function appendInlineFormatting(parent, text) {
+  const parts = text.split(/(\*\*[^*]+\*\*|`[^`]+`)/g);
+  parts.filter(Boolean).forEach((part) => {
+    if (part.startsWith("**") && part.endsWith("**")) {
+      const strong = document.createElement("strong");
+      strong.textContent = part.slice(2, -2);
+      parent.appendChild(strong);
+    } else if (part.startsWith("`") && part.endsWith("`")) {
+      const code = document.createElement("code");
+      code.textContent = part.slice(1, -1);
+      parent.appendChild(code);
+    } else {
+      parent.appendChild(document.createTextNode(part));
+    }
+  });
+}
+
+function renderAssistantContent(container, text) {
+  const lines = text.trim().split(/\r?\n/);
+  let activeList = null;
+  let activeListType = null;
+
+  lines.forEach((rawLine) => {
+    const line = rawLine.trim();
+    if (!line) {
+      activeList = null;
+      activeListType = null;
+      return;
+    }
+
+    const bulletMatch = line.match(/^[-*•]\s+(.+)/);
+    const numberedMatch = line.match(/^\d+[.)]\s+(.+)/);
+    const listType = numberedMatch ? "ol" : bulletMatch ? "ul" : null;
+    const listText = numberedMatch?.[1] || bulletMatch?.[1];
+
+    if (listType) {
+      if (!activeList || activeListType !== listType) {
+        activeList = document.createElement(listType);
+        activeListType = listType;
+        container.appendChild(activeList);
+      }
+      const item = document.createElement("li");
+      appendInlineFormatting(item, listText);
+      activeList.appendChild(item);
+      return;
+    }
+
+    activeList = null;
+    activeListType = null;
+    const paragraph = document.createElement("p");
+    appendInlineFormatting(paragraph, line.replace(/^#{1,4}\s+/, ""));
+    container.appendChild(paragraph);
+  });
+}
+
 function addChatMessage(text, type, extraClass) {
-  const message = document.createElement("div");
+  if (type === "outgoing") {
+    chatWelcome?.remove();
+  }
+
+  const message = document.createElement("article");
   message.classList.add("chat-message", type);
   if (extraClass) {
     message.classList.add(extraClass);
   }
-  message.textContent = text;
+
+  const author = document.createElement("p");
+  author.className = "message-author";
+  author.textContent = type === "outgoing" ? "You" : "Interview insights";
+
+  const content = document.createElement("div");
+  content.className = "message-content";
+  if (type === "incoming" && !extraClass) {
+    renderAssistantContent(content, text);
+  } else {
+    content.textContent = text;
+  }
+
+  message.append(author, content);
   chatBody.appendChild(message);
   chatBody.scrollTop = chatBody.scrollHeight;
   return message;
+}
+
+function resizeChatInput() {
+  chatInput.style.height = "auto";
+  chatInput.style.height = `${Math.min(chatInput.scrollHeight, 140)}px`;
+}
+
+function openChat() {
+  lastFocusedBeforeChat = document.activeElement;
+  updateChatTopicContext();
+  chatPanel.classList.remove("hidden");
+  chatPanel.setAttribute("aria-hidden", "false");
+  openChatButton.classList.add("hidden");
+  openChatButton.setAttribute("aria-expanded", "true");
+  mainContent.inert = true;
+  document.body.classList.add("chat-open");
+  window.setTimeout(() => chatInput.focus(), 0);
+}
+
+function closeChat() {
+  chatPanel.classList.add("hidden");
+  chatPanel.setAttribute("aria-hidden", "true");
+  openChatButton.classList.remove("hidden");
+  openChatButton.setAttribute("aria-expanded", "false");
+  mainContent.inert = false;
+  document.body.classList.remove("chat-open");
+  (lastFocusedBeforeChat || openChatButton).focus();
+}
+
+function trapChatFocus(event) {
+  if (event.key !== "Tab" || chatPanel.classList.contains("hidden")) {
+    return;
+  }
+
+  const focusable = [...chatPanel.querySelectorAll("button, textarea")].filter(
+    (element) => !element.disabled && element.offsetParent !== null,
+  );
+  if (!focusable.length) {
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable.at(-1);
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
+  }
 }
 
 async function sendChatMessage() {
@@ -285,6 +427,7 @@ async function sendChatMessage() {
   const priorHistory = chatHistory.slice(-10);
   chatHistory.push({ role: "user", content: messageText });
   chatInput.value = "";
+  resizeChatInput();
   chatInput.disabled = true;
   sendChatButton.disabled = true;
   const pendingMessage = addChatMessage("Checking your dashboard…", "incoming", "pending");
@@ -323,23 +466,33 @@ async function sendChatMessage() {
 }
 
 // UI wiring and initial page load.
-topicSelect.addEventListener("change", () => loadScores(topicSelect.value));
+topicSelect.addEventListener("change", () => {
+  updateChatTopicContext();
+  loadScores(topicSelect.value);
+});
 refreshTopicsButton.addEventListener("click", refreshTopics);
 window.addEventListener("focus", refreshTopics);
 sendChatButton.addEventListener("click", sendChatMessage);
+chatInput.addEventListener("input", resizeChatInput);
 chatInput.addEventListener("keydown", (event) => {
-  if (event.key === "Enter" && !event.isComposing) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     sendChatMessage();
   }
 });
-closeChatButton.addEventListener("click", () => {
-  chatPanel.classList.add("hidden");
-  openChatButton.classList.remove("hidden");
+promptSuggestionButtons.forEach((button) => {
+  button.addEventListener("click", () => {
+    chatInput.value = button.dataset.prompt;
+    resizeChatInput();
+    sendChatMessage();
+  });
 });
-openChatButton.addEventListener("click", () => {
-  chatPanel.classList.remove("hidden");
-  openChatButton.classList.add("hidden");
-  chatInput.focus();
+closeChatButton.addEventListener("click", closeChat);
+openChatButton.addEventListener("click", openChat);
+chatPanel.addEventListener("keydown", trapChatFocus);
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !chatPanel.classList.contains("hidden")) {
+    closeChat();
+  }
 });
 refreshTopics();
