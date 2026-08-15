@@ -6,11 +6,13 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from chat_backend import (
     ApprovedOperation,
+    ChatProvider,
     ChatToolError,
     build_tools_from_openapi,
     describe_provider_error,
     execute_approved_operation,
     run_groq_tool_chat,
+    run_provider_tool_chat,
     select_request_tools,
 )
 
@@ -205,6 +207,34 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(result.operations, ["list_example"])
         self.assertEqual(self.executed, [2])
         self.assertEqual(completion.call_count, 2)
+
+    @patch("chat_backend._provider_completion")
+    def test_server_can_force_operation_and_arguments(self, completion):
+        completion.return_value = {
+            "role": "assistant",
+            "content": "There are two examples.",
+        }
+
+        result = run_provider_tool_chat(
+            provider=ChatProvider(
+                name="test",
+                api_key="test-key",
+                base_url="https://example.invalid/v1",
+                model="test-model",
+            ),
+            message="Show last week",
+            focus_topic=None,
+            history=[],
+            tools=build_tools_from_openapi(self.openapi, self.operations),
+            approved_operations=self.operations,
+            db=object(),
+            forced_operation="list_example",
+            forced_arguments={"limit": 2},
+        )
+
+        self.assertEqual(result.operations, ["list_example"])
+        self.assertEqual(self.executed, [2])
+        self.assertEqual(completion.call_count, 1)
 
 
 if __name__ == "__main__":

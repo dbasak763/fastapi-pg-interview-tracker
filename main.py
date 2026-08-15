@@ -16,7 +16,8 @@ data, database queries, and the decision about which operations are approved.
 import logging
 import re
 from contextlib import asynccontextmanager
-from datetime import date, datetime, timezone
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from pathlib import Path
 from typing import Dict, List, Literal, Optional
@@ -289,6 +290,20 @@ class ChatResponse(BaseModel):
     route: Optional[str] = None
     operations: List[str] = Field(default_factory=list)
     visualization: Optional[ChatVisualization] = None
+
+
+@dataclass(frozen=True)
+class ChatQueryScope:
+    """Server-resolved scope shared by retrieval, charts, and fallback answers."""
+
+    current_date: date
+    focus_topic: Optional[str]
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
+
+    @property
+    def has_date_window(self) -> bool:
+        return self.start_date is not None and self.end_date is not None
 
 
 class ChatRouteConfig(BaseModel):
@@ -872,10 +887,41 @@ def dashboard_chat_config():
     )
 
 
+def _resolve_chat_query_scope(
+    payload: ChatRequest,
+    *,
+    today: Optional[date] = None,
+) -> ChatQueryScope:
+    """Resolve relative dates and decide whether UI topic context applies."""
+
+    current_date = today or date.today()
+    message = " ".join(payload.message.lower().split())
+    words = set(re.findall(r"[a-z]+", message))
+    asks_for_all_topics = bool(
+        words.intersection({"all", "across", "every", "overall"})
+    ) or "full context" in message
+
+    start_date = None
+    end_date = None
+    if re.search(r"\b(?:last|past)\s+(?:week|7\s+days?)\b", message):
+        start_date = current_date - timedelta(days=7)
+        end_date = current_date
+        asks_for_all_topics = True
+
+    return ChatQueryScope(
+        current_date=current_date,
+        focus_topic=None if asks_for_all_topics else payload.focus_topic,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
 def _build_chat_visualization(
     payload: ChatRequest,
     intent: str,
     db: Session,
+    *,
+    scope: Optional[ChatQueryScope] = None,
 ) -> Optional[ChatVisualization]:
     """Build validated chart data directly from PostgreSQL query results."""
 
@@ -886,13 +932,59 @@ def _build_chat_visualization(
     chart_type: Literal["bar", "line"] = (
         "bar" if words.intersection({"bar", "histogram"}) else "line"
     )
+    resolved_scope = scope or _resolve_chat_query_scope(payload)
+
+    if resolved_scope.has_date_window:
+        attempts = list_attempts(
+            company=None,
+            role=None,
+            level=None,
+            topic=None,
+            attempt_source=None,
+            challenge_id=None,
+            round_number=None,
+            attempt_status="complete",
+            start_date=resolved_scope.start_date,
+            end_date=resolved_scope.end_date,
+            limit=100,
+            offset=0,
+            db=db,
+        )
+        scored_attempts = [
+            attempt for attempt in reversed(attempts) if attempt.score is not None
+        ][-40:]
+        if not scored_attempts:
+            return None
+        return ChatVisualization(
+            chart_type=chart_type,
+            title=(
+                f"Scores from {resolved_scope.start_date.isoformat()} "
+                f"through {resolved_scope.end_date.isoformat()}"
+            ),
+            x_axis_label="Date",
+            y_axis_label="Score",
+            points=[
+                ChatVisualizationPoint(
+                    label=attempt.attempted_date.isoformat(),
+                    value=float(attempt.score),
+                    detail=" · ".join(
+                        part
+                        for part in (attempt.company, attempt.focus_topic)
+                        if part
+                    )
+                    or "Interview attempt",
+                )
+                for attempt in scored_attempts
+            ],
+        )
+
     compares_topics = bool(words.intersection({"topic", "topics"})) and bool(
         words.intersection(
             {"all", "compare", "comparison", "strongest", "weakest"}
         )
     )
 
-    if compares_topics or not payload.focus_topic:
+    if compares_topics or not resolved_scope.focus_topic:
         summaries = topic_summaries(db)
         if not summaries:
             return None
@@ -921,12 +1013,12 @@ def _build_chat_visualization(
         )
 
     try:
-        progression = topic_score_progression(payload.focus_topic, db)
+        progression = topic_score_progression(resolved_scope.focus_topic, db)
     except HTTPException:
         return None
     return ChatVisualization(
         chart_type=chart_type,
-        title=f"{payload.focus_topic} score progression",
+        title=f"{resolved_scope.focus_topic} score progression",
         x_axis_label="Date",
         y_axis_label="Score",
         points=[
@@ -958,7 +1050,52 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         available_providers=settings.available_provider_names(),
         preferences=settings.provider_preferences,
     )
-    visualization = _build_chat_visualization(payload, decision.intent, db)
+    scope = _resolve_chat_query_scope(payload)
+    visualization = _build_chat_visualization(
+        payload,
+        decision.intent,
+        db,
+        scope=scope,
+    )
+    if scope.has_date_window and decision.intent == "visualization" and visualization:
+        values = [point.value for point in visualization.points]
+        highest = max(visualization.points, key=lambda point: point.value)
+        highest_context = highest.detail.split(" · ", 1)[0] if highest.detail else None
+        highest_label = f" at {highest_context}" if highest_context else ""
+        return ChatResponse(
+            reply=(
+                f"From {scope.start_date.isoformat()} through "
+                f"{scope.end_date.isoformat()}, this chart includes "
+                f"{len(visualization.points)} completed scored rounds across all "
+                f"topics. Scores ranged from {min(values):g} to {max(values):g}, "
+                f"with the highest score{highest_label}."
+            ),
+            provider="database",
+            route=decision.intent,
+            operations=["list_attempts"],
+            visualization=visualization,
+        )
+    forced_operation = "list_attempts" if scope.has_date_window else None
+    forced_arguments = None
+    request_context = None
+    if scope.has_date_window:
+        forced_arguments = {
+            "startDate": scope.start_date.isoformat(),
+            "endDate": scope.end_date.isoformat(),
+            "status": "complete",
+            "limit": 100,
+            "offset": 0,
+        }
+        topic_context = (
+            f"only the selected topic {scope.focus_topic!r}"
+            if scope.focus_topic
+            else "all topics; ignore the dashboard's selected topic"
+        )
+        request_context = (
+            f"The requested inclusive date window is "
+            f"{scope.start_date.isoformat()} through {scope.end_date.isoformat()}, "
+            f"using {topic_context}. Use list_attempts with exactly that date window."
+        )
     for provider_name in settings.provider_order(decision.provider):
         provider = settings.build_provider(provider_name, decision.intent)
         try:
@@ -966,7 +1103,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             result = run_provider_tool_chat(
                 provider=provider,
                 message=payload.message,
-                focus_topic=payload.focus_topic,
+                focus_topic=scope.focus_topic,
                 history=[
                     {"role": item.role, "content": item.content}
                     for item in payload.history
@@ -975,6 +1112,10 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
                 approved_operations=APPROVED_CHAT_OPERATIONS,
                 db=db,
                 request_intent=decision.intent,
+                current_date=scope.current_date,
+                request_context=request_context,
+                forced_operation=forced_operation,
+                forced_arguments=forced_arguments,
             )
             return ChatResponse(
                 reply=result.reply,
@@ -1006,6 +1147,60 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
     message = " ".join(payload.message.lower().split())
     message_words = set(re.findall(r"[a-z]+", message))
 
+    if scope.has_date_window:
+        attempts = list_attempts(
+            company=None,
+            role=None,
+            level=None,
+            topic=None,
+            attempt_source=None,
+            challenge_id=None,
+            round_number=None,
+            attempt_status="complete",
+            start_date=scope.start_date,
+            end_date=scope.end_date,
+            limit=100,
+            offset=0,
+            db=db,
+        )
+        scored_attempts = [
+            attempt for attempt in reversed(attempts) if attempt.score is not None
+        ]
+        if not scored_attempts:
+            return ChatResponse(
+                reply=(
+                    f"I found no completed scored rounds from "
+                    f"{scope.start_date:%B %d, %Y} through "
+                    f"{scope.end_date:%B %d, %Y}."
+                ),
+                provider="database",
+                route=decision.intent,
+                operations=["list_attempts"],
+                visualization=visualization,
+            )
+        lines = [
+            (
+                f"From {scope.start_date:%B %d, %Y} through "
+                f"{scope.end_date:%B %d, %Y}, I found "
+                f"{len(scored_attempts)} completed scored rounds across all topics:"
+            )
+        ]
+        lines.extend(
+            (
+                f"- {attempt.attempted_date.isoformat()} — "
+                f"{attempt.company or 'Unknown company'} — "
+                f"{attempt.focus_topic or attempt.topic} — {float(attempt.score):g}"
+            )
+            for attempt in scored_attempts
+        )
+        return ChatResponse(
+            reply="\n".join(lines),
+            provider="database",
+            route=decision.intent,
+            operations=["list_attempts"],
+            visualization=visualization,
+        )
+
     asks_for_weakest_topic = "topic" in message and (
         "weak" in message
         or ("lowest" in message and "average" in message)
@@ -1032,9 +1227,9 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         InterviewAttempt.status == "complete",
         InterviewAttempt.score.is_not(None),
     )
-    if payload.focus_topic:
+    if scope.focus_topic:
         scored_query = scored_query.filter(
-            InterviewAttempt.focus_topic == payload.focus_topic,
+            InterviewAttempt.focus_topic == scope.focus_topic,
         )
 
     attempts = scored_query.order_by(
@@ -1043,9 +1238,7 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
         InterviewAttempt.id.asc(),
     ).all()
 
-    topic_label = (
-        f" for {payload.focus_topic}" if payload.focus_topic else ""
-    )
+    topic_label = f" for {scope.focus_topic}" if scope.focus_topic else ""
     if message_words.intersection({"hello", "hi", "hey"}):
         return ChatResponse(
             reply=(

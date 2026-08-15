@@ -1,6 +1,7 @@
 import os
 import unittest
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import patch
 
 os.environ.setdefault("DATABASE_URL", "sqlite://")
@@ -13,10 +14,80 @@ from main import (
     TopicScorePoint,
     TopicScoreProgressionResponse,
     _build_chat_visualization,
+    _resolve_chat_query_scope,
 )
 
 
 class AttemptSchemaTests(unittest.TestCase):
+    def test_last_week_uses_inclusive_seven_day_window_across_topics(self):
+        scope = _resolve_chat_query_scope(
+            ChatRequest(
+                message="tell me progress in last week latest rounds",
+                focus_topic="Spotify topic",
+            ),
+            today=date(2026, 8, 15),
+        )
+
+        self.assertEqual(scope.start_date, date(2026, 8, 8))
+        self.assertEqual(scope.end_date, date(2026, 8, 15))
+        self.assertIsNone(scope.focus_topic)
+
+    def test_full_context_ignores_selected_topic(self):
+        scope = _resolve_chat_query_scope(
+            ChatRequest(
+                message=(
+                    "tell me progress in last week latest rounds "
+                    "based on full context of topics"
+                ),
+                focus_topic="Spotify topic",
+            ),
+            today=date(2026, 8, 15),
+        )
+
+        self.assertEqual(scope.start_date, date(2026, 8, 8))
+        self.assertIsNone(scope.focus_topic)
+
+    @patch("main.list_attempts")
+    def test_last_week_chart_uses_filtered_attempts_across_topics(self, attempts):
+        attempts.return_value = [
+            SimpleNamespace(
+                attempted_date=date(2026, 8, 12),
+                company="Airbnb",
+                focus_topic="Optimization",
+                score=56,
+            ),
+            SimpleNamespace(
+                attempted_date=date(2026, 8, 9),
+                company="Netflix",
+                focus_topic="Evaluation",
+                score=86,
+            ),
+        ]
+        payload = ChatRequest(
+            message="show me bar chart of latest tests last week",
+            focus_topic="Unrelated selected topic",
+        )
+        scope = _resolve_chat_query_scope(payload, today=date(2026, 8, 15))
+
+        visualization = _build_chat_visualization(
+            payload,
+            "visualization",
+            db=object(),
+            scope=scope,
+        )
+
+        self.assertEqual(visualization.chart_type, "bar")
+        self.assertEqual(
+            visualization.title,
+            "Scores from 2026-08-08 through 2026-08-15",
+        )
+        self.assertEqual(len(visualization.points), 2)
+        self.assertEqual(visualization.points[0].detail, "Netflix · Evaluation")
+        call = attempts.call_args.kwargs
+        self.assertEqual(call["start_date"], date(2026, 8, 8))
+        self.assertEqual(call["end_date"], date(2026, 8, 15))
+        self.assertEqual(call["attempt_status"], "complete")
+
     def test_reads_legacy_challenge_without_round_metadata(self):
         attempt = AttemptResponse.model_validate(
             {

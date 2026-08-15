@@ -591,7 +591,9 @@ async function sendChatMessage() {
         ? `${data.model} · Groq`
         : data.provider === "local"
           ? `${data.model} · Local`
-          : "Built-in answer";
+          : data.provider === "database"
+            ? "Verified PostgreSQL data"
+            : "Built-in answer";
     const assistantMessage = addChatMessage(data.reply, "incoming");
     if (data.visualization) {
       renderChatVisualization(assistantMessage, data.visualization);
