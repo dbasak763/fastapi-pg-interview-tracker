@@ -125,19 +125,6 @@ class AttemptBase(BaseModel):
         if self.status == "complete" and self.score is None:
             raise ValueError("A completed attempt must have a score")
 
-        if self.attempt_source == "challenge":
-            required = {
-                "roundNumber": self.round_number,
-                "roundName": self.round_name,
-                "focusTopic": self.focus_topic,
-                "attemptNumber": self.attempt_number,
-            }
-            missing = [name for name, value in required.items() if value is None]
-            if missing:
-                raise ValueError(
-                    "Challenge attempts require: " + ", ".join(missing)
-                )
-
         if self.completed_at is not None and self.completed_at < self.started_at:
             raise ValueError("completedAt cannot be earlier than startedAt")
         return self
@@ -145,7 +132,23 @@ class AttemptBase(BaseModel):
 
 class AttemptCreate(AttemptBase):
     #Request body used when creating an interview attempt.
-    pass
+    @model_validator(mode="after")
+    def validate_challenge_identity(self):
+        if self.attempt_source != "challenge":
+            return self
+
+        required = {
+            "roundNumber": self.round_number,
+            "roundName": self.round_name,
+            "focusTopic": self.focus_topic,
+            "attemptNumber": self.attempt_number,
+        }
+        missing = [name for name, value in required.items() if value is None]
+        if missing:
+            raise ValueError(
+                "Challenge attempts require: " + ", ".join(missing)
+            )
+        return self
 
 
 class AttemptUpdate(BaseModel):
