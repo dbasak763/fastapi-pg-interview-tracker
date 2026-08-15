@@ -404,6 +404,12 @@ function renderChatVisualization(message, visualization) {
 
   const canvasWrap = document.createElement("div");
   canvasWrap.className = "chat-chart-canvas-wrap";
+  const isTopicComparison =
+    visualization.chartType === "bar" &&
+    visualization.xAxisLabel.toLowerCase().includes("topic");
+  if (isTopicComparison) {
+    canvasWrap.style.height = `${Math.max(300, visualization.points.length * 38)}px`;
+  }
   const canvas = document.createElement("canvas");
   canvas.setAttribute("role", "img");
   canvas.setAttribute(
@@ -414,12 +420,37 @@ function renderChatVisualization(message, visualization) {
   );
   canvasWrap.appendChild(canvas);
   figure.append(heading, canvasWrap);
-  content.appendChild(figure);
+  content.prepend(figure);
 
   const isDateAxis = visualization.xAxisLabel.toLowerCase() === "date";
-  const labels = visualization.points.map((point) =>
+  const fullLabels = visualization.points.map((point) =>
     isDateAxis ? formatDate(point.label) : point.label,
   );
+  const labels = fullLabels.map((label) =>
+    isTopicComparison && label.length > 42
+      ? `${label.slice(0, 39)}…`
+      : label,
+  );
+  const categoryScale = {
+    grid: { display: false },
+    ticks: {
+      autoSkip: false,
+      color: "#71807b",
+      maxRotation: 35,
+      minRotation: 0,
+    },
+  };
+  const valueScale = {
+    beginAtZero: true,
+    max: 100,
+    grid: { color: "#e6ece9" },
+    ticks: { color: "#71807b" },
+    title: {
+      display: true,
+      text: visualization.yAxisLabel,
+      color: "#71807b",
+    },
+  };
   new Chart(canvas.getContext("2d"), {
     type: visualization.chartType,
     data: {
@@ -445,34 +476,23 @@ function renderChatVisualization(message, visualization) {
       ],
     },
     options: {
+      indexAxis: isTopicComparison ? "y" : "x",
       responsive: true,
       maintainAspectRatio: false,
       plugins: {
         legend: { display: false },
         tooltip: {
           callbacks: {
+            title: (contexts) =>
+              fullLabels[contexts[0].dataIndex],
             afterLabel: (context) =>
               visualization.points[context.dataIndex].detail || "",
           },
         },
       },
-      scales: {
-        x: {
-          grid: { display: false },
-          ticks: { color: "#71807b", maxRotation: 35, minRotation: 0 },
-        },
-        y: {
-          beginAtZero: true,
-          max: 100,
-          grid: { color: "#e6ece9" },
-          ticks: { color: "#71807b" },
-          title: {
-            display: true,
-            text: visualization.yAxisLabel,
-            color: "#71807b",
-          },
-        },
-      },
+      scales: isTopicComparison
+        ? { x: valueScale, y: categoryScale }
+        : { x: categoryScale, y: valueScale },
     },
   });
 }

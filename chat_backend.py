@@ -383,9 +383,10 @@ def run_provider_tool_chat(
         )
     elif request_intent == "visualization":
         answer_prompt += (
-            " For visualization requests, briefly explain the most important "
-            "pattern in the returned data. The browser renders a validated "
-            "chart separately, so do not output a Markdown table, ASCII chart, "
+            " For visualization requests, write at most two short sentences "
+            "about the most important pattern in the returned data. The "
+            "browser already renders the validated chart. Do not name axes or "
+            "chart types, and do not output a table, ASCII chart, field names, "
             "or plotting instructions."
         )
     messages[0] = {"role": "system", "content": answer_prompt}
