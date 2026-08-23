@@ -75,6 +75,37 @@ The local API key is required by the OpenAI-compatible client contract but is
 ignored by Ollama. If the selected provider is unavailable, the workflow tries
 the other configured provider once and then uses the deterministic fallback.
 
+For an intentionally local-only deployment or smoke test, set all three route
+preferences to `local` and leave `GROQ_API_KEY` unset:
+
+```dotenv
+LLM_LOOKUP_PROVIDER=local
+LLM_ANALYSIS_PROVIDER=local
+LLM_VISUALIZATION_PROVIDER=local
+```
+
+### Reliability behavior
+
+- Exact count and newest-attempt questions use dedicated, unpaginated read
+  operations and deterministic formatting, so a model cannot mistake one page
+  or one newest row for the entire table.
+- Every model-selected operation is checked against the GET-only allowlist and
+  its Pydantic argument schema. A rejected local tool call gets one bounded
+  repair attempt; a second failure fails closed and moves to the next provider
+  or database fallback.
+- Ollama requests disable hidden reasoning for the constrained routing and
+  caption tasks. This prevents reasoning-capable local models from consuming
+  the response budget without returning usable content.
+- Chart data is always built from validated PostgreSQL rows. Model prose cannot
+  change the Chart.js values, and trusted chart context prevents invented date
+  windows or totals.
+
+Run the regression suite with:
+
+```bash
+python -m unittest discover -s tests
+```
+
 ### Default routing policy
 
 | Request type | Preferred provider/model | Why |
