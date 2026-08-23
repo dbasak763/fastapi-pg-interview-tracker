@@ -200,6 +200,12 @@ class AttemptResponse(AttemptBase):
     created_at: datetime
 
 
+class AttemptCountResponse(BaseModel):
+    """Exact number of attempts matching the supplied read-only filters."""
+
+    count: int = Field(ge=0)
+
+
 class DashboardTopicSummary(BaseModel):
     model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
 
@@ -333,7 +339,7 @@ class EmptyToolArguments(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class ListAttemptsToolArguments(BaseModel):
+class AttemptFilterToolArguments(BaseModel):
     model_config = ConfigDict(
         alias_generator=to_camel,
         populate_by_name=True,
@@ -352,6 +358,9 @@ class ListAttemptsToolArguments(BaseModel):
     status: Optional[Literal["incomplete", "complete", "invalidated"]] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
+
+
+class ListAttemptsToolArguments(AttemptFilterToolArguments):
     limit: int = Field(default=25, ge=1, le=100)
     offset: int = Field(default=0, ge=0, le=10000)
 
@@ -432,7 +441,9 @@ def list_attempts(
     attempt_source: Optional[str] = Query(default=None, alias="attemptSource"),
     challenge_id: Optional[str] = Query(default=None, alias="challengeId"),
     round_number: Optional[int] = Query(default=None, alias="roundNumber"),
-    attempt_status: Optional[str] = Query(default=None, alias="status"),
+    attempt_status: Optional[
+        Literal["incomplete", "complete", "invalidated"]
+    ] = Query(default=None, alias="status"),
     start_date: Optional[date] = Query(default=None, alias="startDate"),
     end_date: Optional[date] = Query(default=None, alias="endDate"),
     limit: int = Query(default=100, ge=1, le=500),
@@ -440,6 +451,46 @@ def list_attempts(
     db: Session = Depends(get_db),
 ):
     """List attempts using optional company, role, topic, source, status, and date filters."""
+    query = _filtered_attempt_query(
+        db,
+        company=company,
+        role=role,
+        level=level,
+        topic=topic,
+        attempt_source=attempt_source,
+        challenge_id=challenge_id,
+        round_number=round_number,
+        attempt_status=attempt_status,
+        start_date=start_date,
+        end_date=end_date,
+    )
+    return (
+        query.order_by(
+            InterviewAttempt.started_at.desc(),
+            InterviewAttempt.id.desc(),
+        )
+        .offset(offset)
+        .limit(limit)
+        .all()
+    )
+
+
+def _filtered_attempt_query(
+    db: Session,
+    *,
+    company: Optional[str] = None,
+    role: Optional[str] = None,
+    level: Optional[str] = None,
+    topic: Optional[str] = None,
+    attempt_source: Optional[str] = None,
+    challenge_id: Optional[str] = None,
+    round_number: Optional[int] = None,
+    attempt_status: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+):
+    """Build the shared read-only filter used by list, count, and latest."""
+
     query = db.query(InterviewAttempt)
     if company:
         query = query.filter(InterviewAttempt.company == company)
@@ -461,15 +512,87 @@ def list_attempts(
         query = query.filter(InterviewAttempt.attempted_date >= start_date)
     if end_date:
         query = query.filter(InterviewAttempt.attempted_date <= end_date)
-    return (
-        query.order_by(
-            InterviewAttempt.started_at.desc(),
-            InterviewAttempt.id.desc(),
-        )
-        .offset(offset)
-        .limit(limit)
-        .all()
-    )
+    return query
+
+
+@app.get(
+    "/api/attempts/count",
+    response_model=AttemptCountResponse,
+    operation_id="count_attempts",
+)
+def count_attempts(
+    company: Optional[str] = None,
+    role: Optional[str] = None,
+    level: Optional[str] = None,
+    topic: Optional[str] = None,
+    attempt_source: Optional[str] = Query(default=None, alias="attemptSource"),
+    challenge_id: Optional[str] = Query(default=None, alias="challengeId"),
+    round_number: Optional[int] = Query(default=None, alias="roundNumber"),
+    attempt_status: Optional[
+        Literal["incomplete", "complete", "invalidated"]
+    ] = Query(default=None, alias="status"),
+    start_date: Optional[date] = Query(default=None, alias="startDate"),
+    end_date: Optional[date] = Query(default=None, alias="endDate"),
+    db: Session = Depends(get_db),
+):
+    """Count all attempts matching filters; this result is never paginated."""
+
+    count = _filtered_attempt_query(
+        db,
+        company=company,
+        role=role,
+        level=level,
+        topic=topic,
+        attempt_source=attempt_source,
+        challenge_id=challenge_id,
+        round_number=round_number,
+        attempt_status=attempt_status,
+        start_date=start_date,
+        end_date=end_date,
+    ).count()
+    return AttemptCountResponse(count=count)
+
+
+@app.get(
+    "/api/attempts/latest",
+    response_model=Optional[AttemptResponse],
+    response_model_by_alias=True,
+    operation_id="latest_attempt",
+)
+def latest_attempt(
+    company: Optional[str] = None,
+    role: Optional[str] = None,
+    level: Optional[str] = None,
+    topic: Optional[str] = None,
+    attempt_source: Optional[str] = Query(default=None, alias="attemptSource"),
+    challenge_id: Optional[str] = Query(default=None, alias="challengeId"),
+    round_number: Optional[int] = Query(default=None, alias="roundNumber"),
+    attempt_status: Optional[
+        Literal["incomplete", "complete", "invalidated"]
+    ] = Query(default=None, alias="status"),
+    start_date: Optional[date] = Query(default=None, alias="startDate"),
+    end_date: Optional[date] = Query(default=None, alias="endDate"),
+    db: Session = Depends(get_db),
+):
+    """Return the newest attempt matching filters, or null when none match."""
+
+    return _filtered_attempt_query(
+        db,
+        company=company,
+        role=role,
+        level=level,
+        topic=topic,
+        attempt_source=attempt_source,
+        challenge_id=challenge_id,
+        round_number=round_number,
+        attempt_status=attempt_status,
+        start_date=start_date,
+        end_date=end_date,
+    ).order_by(
+        InterviewAttempt.attempted_date.desc(),
+        InterviewAttempt.started_at.desc(),
+        InterviewAttempt.id.desc(),
+    ).first()
 
 
 def get_attempt_or_404(attempt_id: int, db: Session) -> InterviewAttempt:
@@ -760,6 +883,39 @@ def _execute_list_attempts(
     return [_serialize_attempt(attempt) for attempt in attempts]
 
 
+def _attempt_filter_kwargs(arguments: AttemptFilterToolArguments) -> dict:
+    """Translate validated camel-case tool filters into route arguments."""
+
+    return {
+        "company": arguments.company,
+        "role": arguments.role,
+        "level": arguments.level,
+        "topic": arguments.topic,
+        "attempt_source": arguments.attempt_source,
+        "challenge_id": arguments.challenge_id,
+        "round_number": arguments.round_number,
+        "attempt_status": arguments.status,
+        "start_date": arguments.start_date,
+        "end_date": arguments.end_date,
+    }
+
+
+def _execute_count_attempts(
+    arguments: AttemptFilterToolArguments,
+    db: Session,
+) -> dict:
+    result = count_attempts(**_attempt_filter_kwargs(arguments), db=db)
+    return result.model_dump(mode="json")
+
+
+def _execute_latest_attempt(
+    arguments: AttemptFilterToolArguments,
+    db: Session,
+) -> Optional[dict]:
+    attempt = latest_attempt(**_attempt_filter_kwargs(arguments), db=db)
+    return _serialize_attempt(attempt) if attempt is not None else None
+
+
 def _execute_get_attempt(
     arguments: AttemptDetailToolArguments,
     db: Session,
@@ -840,6 +996,14 @@ APPROVED_CHAT_OPERATIONS: Dict[str, ApprovedOperation] = {
     "list_attempts": ApprovedOperation(
         arguments_model=ListAttemptsToolArguments,
         executor=_execute_list_attempts,
+    ),
+    "count_attempts": ApprovedOperation(
+        arguments_model=AttemptFilterToolArguments,
+        executor=_execute_count_attempts,
+    ),
+    "latest_attempt": ApprovedOperation(
+        arguments_model=AttemptFilterToolArguments,
+        executor=_execute_latest_attempt,
     ),
     "get_attempt": ApprovedOperation(
         arguments_model=AttemptDetailToolArguments,
@@ -928,6 +1092,119 @@ def _resolve_chat_query_scope(
         topic=None if asks_for_all_topics else selected_topic,
         start_date=start_date,
         end_date=end_date,
+    )
+
+
+def _explicit_attempt_status(words: set[str]) -> Optional[str]:
+    """Map natural-language status words to the database enum."""
+
+    if words.intersection({"invalid", "invalidated"}):
+        return "invalidated"
+    if words.intersection({"incomplete", "unfinished"}):
+        return "incomplete"
+    if words.intersection({"complete", "completed", "finished"}):
+        return "complete"
+    return None
+
+
+def _resolve_precise_attempt_operation(
+    message: str,
+    scope: ChatQueryScope,
+) -> tuple[Optional[str], Optional[dict], Optional[str]]:
+    """Resolve unambiguous count/latest lookups before model tool routing."""
+
+    if scope.topic or scope.has_date_window:
+        return None, None, None
+
+    words = set(re.findall(r"[a-z]+", message.lower()))
+    attempt_nouns = {
+        "attempt",
+        "attempts",
+        "interview",
+        "interviews",
+        "round",
+        "rounds",
+    }
+    asks_for_count = (
+        "count" in words or {"how", "many"}.issubset(words)
+    ) and bool(words.intersection(attempt_nouns))
+    asks_for_latest = bool(
+        words.intersection({"latest", "newest", "recent", "current"})
+    ) and bool(words.intersection(attempt_nouns | {"score"}))
+    if not asks_for_count and not asks_for_latest:
+        return None, None, None
+
+    status_filter = _explicit_attempt_status(words)
+    arguments = {"status": status_filter} if status_filter else {}
+    if asks_for_count:
+        context = (
+            "Use the exact, unpaginated database count returned by "
+            "count_attempts."
+        )
+        return "count_attempts", arguments, context
+
+    context = (
+        "Use every requested field from the single row returned by "
+        "latest_attempt."
+    )
+    return "latest_attempt", arguments, context
+
+
+def _build_precise_attempt_response(
+    message: str,
+    scope: ChatQueryScope,
+    *,
+    intent: str,
+    visualization: Optional[ChatVisualization],
+    db: Session,
+) -> Optional[ChatResponse]:
+    """Format exact count/latest facts without free-form model additions."""
+
+    operation, raw_arguments, _ = _resolve_precise_attempt_operation(
+        message,
+        scope,
+    )
+    if operation is None:
+        return None
+
+    filters = AttemptFilterToolArguments.model_validate(raw_arguments or {})
+    if operation == "count_attempts":
+        result = count_attempts(**_attempt_filter_kwargs(filters), db=db)
+        status_label = f" {filters.status}" if filters.status else ""
+        noun = "attempt" if result.count == 1 else "attempts"
+        return ChatResponse(
+            reply=f"You have {result.count}{status_label} interview {noun}.",
+            provider="database",
+            route=intent,
+            operations=[operation],
+            visualization=visualization,
+        )
+
+    attempt = latest_attempt(**_attempt_filter_kwargs(filters), db=db)
+    if attempt is None:
+        status_label = f" {filters.status}" if filters.status else ""
+        return ChatResponse(
+            reply=f"I found no{status_label} interview attempts.",
+            provider="database",
+            route=intent,
+            operations=[operation],
+            visualization=visualization,
+        )
+    score = (
+        f"score {float(attempt.score):g}"
+        if attempt.score is not None
+        else "score unavailable"
+    )
+    return ChatResponse(
+        reply=(
+            f"Your latest matching attempt was on "
+            f"{attempt.attempted_date:%B %d, %Y}: "
+            f"{attempt.company or 'Unknown company'} — {attempt.topic} — {score}."
+        ),
+        provider="database",
+        route=intent,
+        operations=[operation],
+        visualization=visualization,
     )
 
 
@@ -1113,10 +1390,21 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             operations=["list_attempts"],
             visualization=visualization,
         )
-    forced_operation = "list_attempts" if scope.has_date_window else None
+    precise_response = _build_precise_attempt_response(
+        payload.message,
+        scope,
+        intent=decision.intent,
+        visualization=visualization,
+        db=db,
+    )
+    if precise_response is not None:
+        return precise_response
+
+    forced_operation = None
     forced_arguments = None
     request_context = None
     if scope.has_date_window:
+        forced_operation = "list_attempts"
         forced_arguments = {
             "startDate": scope.start_date.isoformat(),
             "endDate": scope.end_date.isoformat(),
@@ -1133,6 +1421,16 @@ def dashboard_chat(payload: ChatRequest, db: Session = Depends(get_db)):
             f"The requested inclusive date window is "
             f"{scope.start_date.isoformat()} through {scope.end_date.isoformat()}, "
             f"using {topic_context}. Use list_attempts with exactly that date window."
+        )
+    elif decision.intent == "visualization" and visualization:
+        lowest = min(visualization.points, key=lambda point: point.value)
+        highest = max(visualization.points, key=lambda point: point.value)
+        request_context = (
+            f"The validated chart is titled {visualization.title!r} and contains "
+            f"{len(visualization.points)} category points. It has no date window "
+            f"and no overall attempt total; do not mention either. The lowest "
+            f"value is {lowest.label!r} at {lowest.value:g}, and the highest is "
+            f"{highest.label!r} at {highest.value:g}."
         )
     for provider_name in settings.provider_order(decision.provider):
         provider = settings.build_provider(provider_name, decision.intent)

@@ -8,6 +8,7 @@ from chat_backend import (
     ApprovedOperation,
     ChatProvider,
     ChatToolError,
+    _provider_completion,
     build_tools_from_openapi,
     describe_provider_error,
     execute_approved_operation,
@@ -168,6 +169,29 @@ class ChatBackendTests(unittest.TestCase):
         )
         self.assertNotIn("account details", description)
 
+    @patch("chat_backend.httpx.post")
+    def test_local_completion_disables_hidden_reasoning(self, post):
+        post.return_value.raise_for_status.return_value = None
+        post.return_value.json.return_value = {
+            "choices": [{"message": {"content": "ready"}}]
+        }
+
+        result = _provider_completion(
+            provider=ChatProvider(
+                name="local",
+                api_key="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                model="qwen3:8b",
+            ),
+            messages=[{"role": "user", "content": "status"}],
+            tools=[],
+        )
+
+        self.assertEqual(result["content"], "ready")
+        request_body = post.call_args.kwargs["json"]
+        self.assertEqual(request_body["reasoning_effort"], "none")
+        self.assertEqual(request_body["max_tokens"], 1200)
+
     @patch("chat_backend._provider_completion")
     def test_tool_call_is_executed_then_returned_to_model(self, completion):
         responses = iter(
@@ -220,6 +244,8 @@ class ChatBackendTests(unittest.TestCase):
         routing_prompt = prompts[0]
         self.assertIn("status must be exactly one of", routing_prompt)
         self.assertIn("completed or finished", routing_prompt)
+        self.assertNotIn("62 to 66", prompts[1])
+        self.assertIn("actual returned scores", prompts[1])
 
     @patch("chat_backend._provider_completion")
     def test_invalid_tool_call_cannot_become_a_factual_answer(self, completion):
@@ -240,7 +266,7 @@ class ChatBackendTests(unittest.TestCase):
 
         with self.assertRaisesRegex(
             ChatToolError,
-            "did not provide valid arguments",
+            "after repair",
         ):
             run_provider_tool_chat(
                 provider=ChatProvider(
@@ -258,7 +284,71 @@ class ChatBackendTests(unittest.TestCase):
             )
 
         self.assertEqual(self.executed, [])
-        self.assertEqual(completion.call_count, 1)
+        self.assertEqual(completion.call_count, 2)
+
+    @patch("chat_backend._provider_completion")
+    def test_invalid_local_tool_call_is_repaired_once(self, completion):
+        completion.side_effect = [
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_bad",
+                        "type": "function",
+                        "function": {
+                            "name": "list_example",
+                            "arguments": '{"limit": 50}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_fixed",
+                        "type": "function",
+                        "function": {
+                            "name": "list_example",
+                            "arguments": '{"limit": 2}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "assistant",
+                "content": "There are two examples.",
+            },
+        ]
+
+        result = run_provider_tool_chat(
+            provider=ChatProvider(
+                name="local",
+                api_key="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                model="qwen3:8b",
+            ),
+            message="How many examples?",
+            focus_topic=None,
+            history=[],
+            tools=build_tools_from_openapi(self.openapi, self.operations),
+            approved_operations=self.operations,
+            db=object(),
+        )
+
+        self.assertEqual(result.reply, "There are two examples.")
+        self.assertEqual(result.operations, ["list_example"])
+        self.assertEqual(self.executed, [2])
+        self.assertEqual(completion.call_count, 3)
+        repair_messages = completion.call_args_list[1].kwargs["messages"]
+        self.assertTrue(
+            any(
+                "Retry exactly one" in (item.get("content") or "")
+                for item in repair_messages
+            )
+        )
 
     @patch("chat_backend._provider_completion")
     def test_server_can_force_operation_and_arguments(self, completion):
@@ -287,6 +377,46 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(result.operations, ["list_example"])
         self.assertEqual(self.executed, [2])
         self.assertEqual(completion.call_count, 1)
+
+    @patch("chat_backend._provider_completion")
+    def test_visualization_prompt_cannot_invent_missing_scope(self, completion):
+        prompts = []
+
+        def complete(**kwargs):
+            prompts.append(kwargs["messages"][0]["content"])
+            return {
+                "role": "assistant",
+                "content": "The chart compares two categories. One is higher.",
+            }
+
+        completion.side_effect = complete
+
+        run_provider_tool_chat(
+            provider=ChatProvider(
+                name="local",
+                api_key="ollama",
+                base_url="http://127.0.0.1:11434/v1",
+                model="qwen3:8b",
+            ),
+            message="Compare categories",
+            focus_topic=None,
+            history=[],
+            tools=build_tools_from_openapi(self.openapi, self.operations),
+            approved_operations=self.operations,
+            db=object(),
+            request_intent="visualization",
+            request_context=(
+                "There is no date window and no overall attempt total; do not "
+                "mention either."
+            ),
+            forced_operation="list_example",
+            forced_arguments={"limit": 2},
+        )
+
+        self.assertEqual(completion.call_count, 1)
+        self.assertIn("never invent or estimate either", prompts[0])
+        self.assertIn("Do not claim causation", prompts[0])
+        self.assertNotIn("first state the inclusive date window", prompts[0])
 
 
 if __name__ == "__main__":
