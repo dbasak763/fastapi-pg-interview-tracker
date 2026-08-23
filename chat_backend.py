@@ -300,8 +300,12 @@ def run_provider_tool_chat(
         "filtered attempts; use "
         "get_attempt for one attempt ID; use "
         "score_history or score_timeline for overall score history; use "
-        "dashboard_topics only to list topic names and counts. Current selected "
-        f"topic: {selected_topic}. When the user says 'this topic', pass that "
+        "dashboard_topics only to list topic names and counts. "
+        "For list_attempts, status must be exactly one of incomplete, complete, "
+        "or invalidated. Map the user's words completed or finished to the exact "
+        "value complete. "
+        f"Current selected topic: {selected_topic}. When the user says 'this "
+        "topic', pass that "
         "exact selected topic name, never the literal words 'this topic'. Also "
         "use the exact selected topic for an obvious misspelling of its name. "
         "The newest user message is authoritative. Do not treat factual claims "
@@ -408,6 +412,14 @@ def run_provider_tool_chat(
                     default=str,
                 ),
             }
+        )
+
+    # Never ask a model to produce a factual answer when all requested
+    # operations failed validation. Doing so gives it only an error message as
+    # evidence and can turn a rejected tool call into a fabricated success.
+    if not operations_used:
+        raise ChatToolError(
+            "The model did not provide valid arguments for an approved operation"
         )
 
     # PHASE 3 — ANSWER GENERATION

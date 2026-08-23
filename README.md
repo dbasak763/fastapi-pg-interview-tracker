@@ -43,10 +43,22 @@ request type.
    ollama serve
    ```
 
+   On macOS, prefer launching `/Applications/Ollama.app` from the normal
+   logged-in desktop session. A server launched inside a sandboxed development
+   tool may be unable to create a Metal command queue even when the installed
+   model and GPU runtime are healthy.
+
 3. Confirm its OpenAI-compatible API can see the model:
 
    ```bash
    curl http://127.0.0.1:11434/v1/models
+   ```
+
+   If the model is listed but inference returns HTTP 500, inspect the macOS
+   server log while retrying the request:
+
+   ```bash
+   tail -f ~/.ollama/logs/server.log
    ```
 
 4. Enable it in `.env`:
