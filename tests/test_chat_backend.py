@@ -170,26 +170,35 @@ class ChatBackendTests(unittest.TestCase):
 
     @patch("chat_backend._provider_completion")
     def test_tool_call_is_executed_then_returned_to_model(self, completion):
-        completion.side_effect = [
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "call_1",
-                        "type": "function",
-                        "function": {
-                            "name": "list_example",
-                            "arguments": '{"limit": 2}',
-                        },
-                    }
-                ],
-            },
-            {
-                "role": "assistant",
-                "content": "There are two examples.",
-            },
-        ]
+        responses = iter(
+            [
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {
+                                "name": "list_example",
+                                "arguments": '{"limit": 2}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "assistant",
+                    "content": "There are two examples.",
+                },
+            ]
+        )
+        prompts = []
+
+        def complete(**kwargs):
+            prompts.append(kwargs["messages"][0]["content"])
+            return next(responses)
+
+        completion.side_effect = complete
 
         result = run_groq_tool_chat(
             api_key="test-key",
@@ -207,6 +216,49 @@ class ChatBackendTests(unittest.TestCase):
         self.assertEqual(result.operations, ["list_example"])
         self.assertEqual(self.executed, [2])
         self.assertEqual(completion.call_count, 2)
+
+        routing_prompt = prompts[0]
+        self.assertIn("status must be exactly one of", routing_prompt)
+        self.assertIn("completed or finished", routing_prompt)
+
+    @patch("chat_backend._provider_completion")
+    def test_invalid_tool_call_cannot_become_a_factual_answer(self, completion):
+        completion.return_value = {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "list_example",
+                        "arguments": '{"limit": 50}',
+                    },
+                }
+            ],
+        }
+
+        with self.assertRaisesRegex(
+            ChatToolError,
+            "did not provide valid arguments",
+        ):
+            run_provider_tool_chat(
+                provider=ChatProvider(
+                    name="local",
+                    api_key="ollama",
+                    base_url="http://127.0.0.1:11434/v1",
+                    model="qwen3:8b",
+                ),
+                message="How many examples?",
+                focus_topic=None,
+                history=[],
+                tools=build_tools_from_openapi(self.openapi, self.operations),
+                approved_operations=self.operations,
+                db=object(),
+            )
+
+        self.assertEqual(self.executed, [])
+        self.assertEqual(completion.call_count, 1)
 
     @patch("chat_backend._provider_completion")
     def test_server_can_force_operation_and_arguments(self, completion):
